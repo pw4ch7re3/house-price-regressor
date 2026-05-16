@@ -1,0 +1,3 @@
+if __name__ == "__main__":
+    # Train a model based on input (interactive) or every model
+    ...
