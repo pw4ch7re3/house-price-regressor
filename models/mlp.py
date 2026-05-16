@@ -2,11 +2,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 
 from dataclasses import dataclass, field
 
+from models import ModelConfig
+
+
 @dataclass
-class MLPConfig(object):
+class MLPConfig(ModelConfig):
     input_dim: int
     hidden_dims: list[int]
     output_dim: int
@@ -15,8 +19,11 @@ class MLPConfig(object):
     
     use_batch_norm: bool = field(default=False)
 
+
 class MLP(nn.Module):
     def __init__(self, model_config: MLPConfig):
+        super().__init__()
+
         input_dim = model_config.input_dim
         hidden_dims = model_config.hidden_dims
         output_dim = model_config.output_dim
@@ -46,3 +53,44 @@ class MLP(nn.Module):
     
     def forward(self, x):
         return self.network(x)
+
+    def fit(self, train_config):
+        X_train = train_config.X
+        y_train = train_config.y
+
+        if hasattr(X_train, "values"):
+            X = torch.as_tensor(X_train.values, dtype=torch.float32)
+        else:
+            X = torch.as_tensor(X_train, dtype=torch.float32)
+
+        if hasattr(y_train, "values"):
+            y = torch.as_tensor(y_train.values, dtype=torch.float32)
+        else:
+            y = torch.as_tensor(y_train, dtype=torch.float32)
+
+        if y.ndim == 1:
+            y = y.unsqueeze(1)
+
+        loader = DataLoader(
+            TensorDataset(X, y),
+            batch_size=train_config.batch_size or len(X),
+            shuffle=True,
+        )
+
+        optimizer = optim.Adam(self.parameters(), lr=train_config.lr)
+        criterion = nn.MSELoss()
+
+        self.train()
+        for epoch in range(train_config.epochs):
+            epoch_loss = 0.0
+            for x_batch, y_batch in loader:
+                optimizer.zero_grad()
+                loss = criterion(self(x_batch), y_batch)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item() * x_batch.size(0)
+
+            if train_config.verbose:
+                print(f"epoch {epoch + 1}/{train_config.epochs} loss {epoch_loss / len(X):.4f}")
+
+        return self
