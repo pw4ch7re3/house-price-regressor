@@ -22,12 +22,16 @@ output_path = "models/best_models"
 def train(model_config: ModelConfig, train_config: TrainConfig):
     model_name = model_config.model.lower()
     if model_name == "mlp":
-        model = MLP(model_config)
-        model.fit(train_config)
+        model = MLP(model_config)    
+    elif model_name in ("decision_tree", "decision tree", "dt"):
+        ...
+    elif model_name == "mgbdt":
+        ...
 
-        os.makedirs(output_path, exist_ok=True)
-        torch.save(model.state_dict(), os.path.join(output_path, f"best_{model_name}.pth"))
+    model.fit(train_config)
 
+    os.makedirs(output_path, exist_ok=True)
+    torch.save(model.state_dict(), os.path.join(output_path, f"best_{model_name}.pth"))
 
 def main():
     df = load_df(input_path + "/" + "usa_housing_dataset.csv")
