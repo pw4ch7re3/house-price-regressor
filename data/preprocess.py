@@ -2,6 +2,8 @@ from urllib import request, parse
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+import numpy as np
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 import os
 import sys
@@ -84,6 +86,16 @@ def gaussian_normalize(df, column_names):
         std = df[column].std()
         scaled_df[column] = (df[column] - mean) / std
     return scaled_df
+
+
+def latlong2cartesian(lat, long):
+    lat_rad = np.radians(lat)
+    long_rad = np.radians(long)
+    
+    x = np.cos(lat_rad) * np.cos(long_rad)
+    y = np.cos(lat_rad) * np.sin(long_rad)
+    z = np.sin(lat_rad)
+    return x, y, z
 
 
 if __name__ == "__main__":
