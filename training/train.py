@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
 import os
 import sys
 import argparse
@@ -13,6 +12,8 @@ if path not in sys.path:
     sys.path.insert(0, path)
 
 from data.dataload import load_df, split_X_y, split_train_test
+from metrics.mse import rmse
+from metrics.r2_score import r2_score
 from models import ModelConfig, TrainConfig
 from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
@@ -41,10 +42,7 @@ def train(model_config: ModelConfig, train_config: TrainConfig):
     return model
 
 def main(args):
-    if not args.per_sqft:
-        data_path = input_path + "/usa_housing_dataset.csv"
-    else:
-        data_path = input_path + "/usa_housing_dataset_price_per_sqft.csv"
+    data_path = input_path + "/usa_housing_dataset_processed.csv"
     df = load_df(data_path)
     X, y = split_X_y(df, args.target)
 
@@ -78,12 +76,19 @@ def main(args):
     else:
         raise ValueError(f"Unknown model: {args.model}")
 
-    train(model_config, train_config)
+    model = train(model_config, train_config)
+
+    y_train_pred = model.predict(X_train)
+    print(f"Train  RMSE: {rmse(y_train, y_train_pred):.4f}")
+    print(f"Train  R²:   {r2_score(y_train, y_train_pred):.4f}")
+    
+    y_test_pred = model.predict(X_test)
+    print(f"Test  RMSE: {rmse(y_test, y_test_pred):.4f}")
+    print(f"Test  R²:   {r2_score(y_test, y_test_pred):.4f}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a house price regression model")
-    parser.add_argument("--per_sqft", action="store_true", default=False)
     parser.add_argument("--target", type=str, default="price")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-3)

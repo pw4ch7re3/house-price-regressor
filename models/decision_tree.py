@@ -29,10 +29,6 @@ class DecisionTree:
 
         self.tree.fit(X_train, y_train)
 
-        if train_config.verbose:
-            score = self.tree.score(X_train, y_train)
-            print(f"training R² score: {score:.4f}")
-
         return self
 
     def predict(self, X):

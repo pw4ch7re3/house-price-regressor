@@ -1,9 +1,10 @@
 import re
 import pandas as pd
+import numpy as np
 
 GEOCODE_PATH = "./raw/GeocodeResults.csv"
 HOUSING_PATH = "./raw/usa_housing_dataset.csv"
-OUTPUT_PATH = "./raw/usa_housing_dataset_price_per_sqft.csv"
+OUTPUT_PATH = "./raw/usa_housing_dataset_processed.csv"
 
 GEOCODE_COLS = [
     "row_id",
@@ -65,7 +66,9 @@ def fill_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
-    housing["price"] = housing["price"] / housing["sqft_living"]
+    housing = housing[housing["price"] > 0]
+    # housing["price"] = housing["price"] / housing["sqft_living"]
+    housing["price"] = np.log1p(housing["price"] / housing["sqft_living"])
     return housing
 
 def misc(housing: pd.DataFrame) -> pd.DataFrame:
