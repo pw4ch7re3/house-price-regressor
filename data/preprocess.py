@@ -76,6 +76,13 @@ def fill_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
     )
     return housing
 
+def drop_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
+    return housing.dropna(subset=["x", "y", "z"])
+
+def drop_random_coords(housing: pd.DataFrame) -> pd.DataFrame:
+    housing = fill_missing_coords(housing)
+    drop_idx = housing.sample(n=101, random_state=42).index
+    return housing.drop(drop_idx).reset_index(drop=True)
 
 def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
     housing = housing[housing["price"] > 0]
@@ -84,7 +91,9 @@ def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
     return housing
 
 def misc(housing: pd.DataFrame) -> pd.DataFrame:
-    housing = housing.drop(columns=["street", "city", "statezip", "country"])
+    housing = housing.drop(columns=["country"])
+    for col in ["street", "city", "statezip"]:
+        housing[col] = housing[col].astype("category").cat.codes
 
     housing["has_basement"] = (housing["sqft_basement"] > 0).astype(int)
     housing = housing.drop(columns=["sqft_basement"])
@@ -94,6 +103,7 @@ def misc(housing: pd.DataFrame) -> pd.DataFrame:
 
     housing["date"] = pd.to_datetime(housing["date"])
     housing["age"] = housing["date"].dt.year - housing["yr_built"]
+    # housing = housing.drop(columns=["date", "yr_built", "x", "y", "z"])
     housing = housing.drop(columns=["date", "yr_built"])
 
     return housing
@@ -103,6 +113,8 @@ def main() -> None:
     housing = pd.read_csv(HOUSING_PATH)
     housing = geocode_bulk(housing)
     housing = fill_missing_coords(housing)
+    # housing = drop_missing_coords(housing)
+    # housing = drop_random_coords(housing)
     housing = normalize_price(housing)
     housing = misc(housing)
     housing.to_csv(OUTPUT_PATH, index=False)
