@@ -17,6 +17,14 @@ GEOCODE_COLS = [
     "side",
 ]
 
+def latlong2cartesian(lat, long):
+    lat_rad = np.radians(lat)
+    long_rad = np.radians(long)
+
+    x = np.cos(lat_rad) * np.cos(long_rad)
+    y = np.cos(lat_rad) * np.sin(long_rad)
+    z = np.sin(lat_rad)
+    return x, y, z
 
 def normalize_address(address: str) -> str:
     return re.sub(r"[\s,]+", " ", str(address)).strip().lower()
@@ -41,23 +49,27 @@ def geocode_bulk(housing: pd.DataFrame) -> pd.DataFrame:
     matched = coords.notna()
 
     lon_lat = coords[matched].str.split(",", expand=True).astype(float)
-    housing["longitude"] = pd.NA
-    housing["latitude"] = pd.NA
-    housing.loc[matched, "longitude"] = lon_lat[0].values
-    housing.loc[matched, "latitude"] = lon_lat[1].values
+    x, y, z = latlong2cartesian(lon_lat[1].values, lon_lat[0].values)
+    housing["x"] = pd.NA
+    housing["y"] = pd.NA
+    housing["z"] = pd.NA
+    housing.loc[matched, "x"] = x
+    housing.loc[matched, "y"] = y
+    housing.loc[matched, "z"] = z
 
     print(f"Geocoded {matched.sum()} / {len(housing)} rows")
     return housing
 
 
 def fill_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
-    missing = housing["longitude"].isna() | housing["latitude"].isna()
-    means = housing.groupby("statezip")[["longitude", "latitude"]].transform("mean")
+    coord_cols = ["x", "y", "z"]
+    missing = housing[coord_cols].isna().any(axis=1)
+    means = housing.groupby("statezip")[coord_cols].transform("mean")
 
-    housing.loc[missing, "longitude"] = means.loc[missing, "longitude"]
-    housing.loc[missing, "latitude"] = means.loc[missing, "latitude"]
+    for col in coord_cols:
+        housing.loc[missing, col] = means.loc[missing, col]
 
-    still_missing = housing["longitude"].isna() | housing["latitude"].isna()
+    still_missing = housing[coord_cols].isna().any(axis=1)
     print(
         f"Filled {missing.sum() - still_missing.sum()} / {missing.sum()} missing coords "
         f"({still_missing.sum()} statezip groups had no coords)"
