@@ -96,7 +96,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="mlp",
                         choices=["mlp", "dt"],
                         help="model to train (mlp or dt)")
-    parser.add_argument("--max_depth", type=int, default=None,
+    parser.add_argument("--max_depth", type=int, default=6,
                         help="max depth for decision tree")
     parser.add_argument("--min_samples_split", type=int, default=2,
                         help="min samples to split for decision tree")

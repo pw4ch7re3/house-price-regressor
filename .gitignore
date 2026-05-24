@@ -217,3 +217,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .vscode/settings.json
+models/best_models/best_dt.pth
+models/best_models/best_mlp.pth
