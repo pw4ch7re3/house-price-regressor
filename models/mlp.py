@@ -15,7 +15,7 @@ class MLPConfig(ModelConfig):
     hidden_dims: list[int]
     output_dim: int
     dropout: float = field(default=0.2)
-    activation: nn.Module = field(default=nn.ReLU)
+    activation: type[nn.Module] = field(default=nn.ReLU)
     
     use_batch_norm: bool = field(default=False)
 
@@ -94,3 +94,12 @@ class MLP(nn.Module):
                 print(f"epoch {epoch + 1}/{train_config.epochs} loss {epoch_loss / len(X):.4f}")
 
         return self
+
+    def predict(self, X):
+        if hasattr(X, "values"):
+            X = torch.as_tensor(X.values, dtype=torch.float32)
+        else:
+            X = torch.as_tensor(X, dtype=torch.float32)
+        self.eval()
+        with torch.no_grad():
+            return self(X).squeeze(1).numpy()
