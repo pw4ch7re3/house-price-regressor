@@ -11,6 +11,8 @@ path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if path not in sys.path:
     sys.path.insert(0, path)
 
+from sklearn.preprocessing import StandardScaler
+
 from data.dataload import load_df, split_X_y, split_train_test
 from metrics.mse import rmse
 from metrics.r2_score import r2_score
@@ -49,6 +51,12 @@ def main(args):
     # X = X[["bedrooms", "bathrooms", "floors"]]
 
     (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
+
+    scaler = None
+    if args.model == "mlp":
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
 
     train_config = TrainConfig(
         X=X_train,
@@ -90,9 +98,9 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a house price regression model")
     parser.add_argument("--target", type=str, default="price")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--model", type=str, default="mlp",
                         choices=["mlp", "dt"],
                         help="model to train (mlp or dt)")

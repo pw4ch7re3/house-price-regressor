@@ -14,10 +14,10 @@ class MLPConfig(ModelConfig):
     input_dim: int
     hidden_dims: list[int]
     output_dim: int
-    dropout: float = field(default=0.2)
+    dropout: float = field(default=0.0)
     activation: type[nn.Module] = field(default=nn.ReLU)
     
-    use_batch_norm: bool = field(default=False)
+    use_batch_norm: bool = field(default=True)
 
 
 class MLP(nn.Module):
