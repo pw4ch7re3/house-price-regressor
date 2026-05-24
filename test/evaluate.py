@@ -54,7 +54,7 @@ def load_model_from_file(path: str):
 
 
 def evaluate(args):
-	data_path = os.path.join("data/raw", "usa_housing_dataset_processed.csv")
+	data_path = os.path.join("data/processed", "usa_housing_dataset_processed.csv")
 	df = load_df(data_path)
 	X, y = split_X_y(df, args.target)
 

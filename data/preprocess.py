@@ -4,7 +4,7 @@ import numpy as np
 
 GEOCODE_PATH = "./raw/GeocodeResults.csv"
 HOUSING_PATH = "./raw/usa_housing_dataset.csv"
-OUTPUT_PATH = "./raw/usa_housing_dataset_processed.csv"
+OUTPUT_PATH = "./processed/usa_housing_dataset_processed.csv"
 
 GEOCODE_COLS = [
     "row_id",
@@ -64,7 +64,7 @@ def geocode_bulk(housing: pd.DataFrame) -> pd.DataFrame:
 def fill_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
     coord_cols = ["x", "y", "z"]
     missing = housing[coord_cols].isna().any(axis=1)
-    means = housing.groupby("statezip")[coord_cols].transform("mean")
+    means = housing.groupby("city")[coord_cols].transform("mean")
 
     for col in coord_cols:
         housing.loc[missing, col] = means.loc[missing, col]
@@ -72,7 +72,7 @@ def fill_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
     still_missing = housing[coord_cols].isna().any(axis=1)
     print(
         f"Filled {missing.sum() - still_missing.sum()} / {missing.sum()} missing coords "
-        f"({still_missing.sum()} statezip groups had no coords)"
+        f"({still_missing.sum()} city groups had no coords)"
     )
     return housing
 

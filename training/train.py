@@ -19,7 +19,7 @@ from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
 
 
-input_path = "data/raw"
+input_path = "data/processed"
 output_path = "models/best_models"
 
 
