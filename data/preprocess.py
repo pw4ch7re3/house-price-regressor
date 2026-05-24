@@ -70,6 +70,13 @@ def _null_latlong():
     df.to_csv("data/raw/null_latlong.csv", index=False)
 
 
+def _remove_null_latlong():
+    df = load_df("data/processed/latlong_added.csv")
+    df = df[df['lat'].notna() & df['long'].notna()]
+
+    df.to_csv("data/processed/null_latlong_removed.csv", index=False)
+
+
 def gaussian_normalize(df, column_names):
     scaled_df = df.copy()
     for column in column_names:
@@ -80,4 +87,4 @@ def gaussian_normalize(df, column_names):
 
 
 if __name__ == "__main__":
-    _null_latlong()
+    ...
