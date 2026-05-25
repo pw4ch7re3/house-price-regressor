@@ -86,8 +86,9 @@ def drop_random_coords(housing: pd.DataFrame) -> pd.DataFrame:
 
 def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
     housing = housing[housing["price"] > 0]
-    # housing["price"] = housing["price"] / housing["sqft_living"]
-    housing["price"] = np.log1p(housing["price"] / housing["sqft_living"])
+    housing["price"] = housing["price"] / housing["sqft_living"]
+    housing = housing[housing["price"] < 1000]
+    # housing["price"] = np.log1p(housing["price"] / housing["sqft_living"])
     return housing
 
 def misc(housing: pd.DataFrame) -> pd.DataFrame:
