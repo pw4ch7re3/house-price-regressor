@@ -2,20 +2,15 @@ import re
 import pandas as pd
 import numpy as np
 
-GEOCODE_PATH = "./raw/GeocodeResults.csv"
-HOUSING_PATH = "./raw/usa_housing_dataset.csv"
-OUTPUT_PATH = "./processed/usa_housing_dataset_processed.csv"
+from data.dataload import load_df
+from sklearn.preprocessing import StandardScaler
 
-GEOCODE_COLS = [
-    "row_id",
-    "input_address",
-    "match",
-    "match_type",
-    "matched_address",
-    "coordinate",
-    "tigerline_id",
-    "side",
-]
+HOUSING_PATH = "data/raw/latlong_added.csv"
+
+FILL_PATH = "data/processed/usa_housing_dataset_processed.csv"
+DROP_PATH = "data/processed/usa_housing_dataset_dropped.csv"
+FILL_THEN_DROP_PATH = "data/processed/usa_housing_dataset_fill_dropped.csv"
+
 
 def latlong2cartesian(lat, long):
     lat_rad = np.radians(lat)
@@ -26,38 +21,17 @@ def latlong2cartesian(lat, long):
     z = np.sin(lat_rad)
     return x, y, z
 
-def normalize_address(address: str) -> str:
-    return re.sub(r"[\s,]+", " ", str(address)).strip().lower()
+
+def add_cartesian(housing: pd.DataFrame) -> pd.DataFrame:
+    x, y, z = latlong2cartesian(housing["lat"], housing["long"])
+    housing = housing.assign(x=x, y=y, z=z).drop(columns=["lat", "long"])
+    return housing
 
 
-def geocode_bulk(housing: pd.DataFrame) -> pd.DataFrame:
-    geocode = pd.read_csv(GEOCODE_PATH, header=None, names=GEOCODE_COLS, dtype=str)
-    geocode = geocode.sort_values("row_id", key=lambda s: s.astype(int))
-    geocode = geocode[["input_address", "coordinate"]].reset_index(drop=True)
-
-    housing_address = (
-        housing["street"] + ", " + housing["city"] + ", " + housing["statezip"]
-    )
-
-    coord_by_address = {
-        normalize_address(addr): coord
-        for addr, coord in zip(geocode["input_address"], geocode["coordinate"])
-        if isinstance(coord, str) and "," in coord
-    }
-
-    coords = housing_address.map(lambda a: coord_by_address.get(normalize_address(a)))
-    matched = coords.notna()
-
-    lon_lat = coords[matched].str.split(",", expand=True).astype(float)
-    x, y, z = latlong2cartesian(lon_lat[1].values, lon_lat[0].values)
-    housing["x"] = pd.NA
-    housing["y"] = pd.NA
-    housing["z"] = pd.NA
-    housing.loc[matched, "x"] = x
-    housing.loc[matched, "y"] = y
-    housing.loc[matched, "z"] = z
-
-    print(f"Geocoded {matched.sum()} / {len(housing)} rows")
+def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
+    housing = housing[housing["price"] > 0]
+    housing["price"] = housing["price"] / housing["sqft_living"]
+    housing = housing[housing["price"] < 1000]
     return housing
 
 
@@ -69,27 +43,19 @@ def fill_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
     for col in coord_cols:
         housing.loc[missing, col] = means.loc[missing, col]
 
-    still_missing = housing[coord_cols].isna().any(axis=1)
-    print(
-        f"Filled {missing.sum() - still_missing.sum()} / {missing.sum()} missing coords "
-        f"({still_missing.sum()} city groups had no coords)"
-    )
+    # print(f"Filled {missing.sum()} missing coords ")
     return housing
+
 
 def drop_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
     return housing.dropna(subset=["x", "y", "z"])
+
 
 def drop_random_coords(housing: pd.DataFrame) -> pd.DataFrame:
     housing = fill_missing_coords(housing)
     drop_idx = housing.sample(n=101, random_state=42).index
     return housing.drop(drop_idx).reset_index(drop=True)
 
-def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
-    housing = housing[housing["price"] > 0]
-    housing["price"] = housing["price"] / housing["sqft_living"]
-    housing = housing[housing["price"] < 1000]
-    # housing["price"] = np.log1p(housing["price"] / housing["sqft_living"])
-    return housing
 
 def misc(housing: pd.DataFrame) -> pd.DataFrame:
     housing = housing.drop(columns=["country"])
@@ -111,15 +77,22 @@ def misc(housing: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    housing = pd.read_csv(HOUSING_PATH)
-    housing = geocode_bulk(housing)
-    housing = fill_missing_coords(housing)
-    # housing = drop_missing_coords(housing)
-    # housing = drop_random_coords(housing)
+    housing = load_df(HOUSING_PATH)
+    housing = add_cartesian(housing)
     housing = normalize_price(housing)
-    housing = misc(housing)
-    housing.to_csv(OUTPUT_PATH, index=False)
-    print(f"Saved to {OUTPUT_PATH}")
+
+    housing_filled = fill_missing_coords(housing.copy())
+    housing_dropped = drop_missing_coords(housing.copy())
+    housing_filled_then_dropped = drop_random_coords(housing.copy())
+
+    housing_filled = misc(housing_filled)
+    housing_dropped = misc(housing_dropped)
+    housing_filled_then_dropped = misc(housing_filled_then_dropped)
+
+    housing_filled.to_csv(FILL_PATH, index=False)
+    housing_dropped.to_csv(DROP_PATH, index=False)
+    housing_filled_then_dropped.to_csv(FILL_THEN_DROP_PATH, index=False)
+
 
 if __name__ == "__main__":
     main()
