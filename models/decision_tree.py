@@ -4,6 +4,7 @@ from typing import Literal
 from sklearn.tree import DecisionTreeRegressor
 
 from models import ModelConfig
+from metrics.timer import timer
 
 
 @dataclass
@@ -23,6 +24,7 @@ class DecisionTree:
             max_features=model_config.max_features,
         )
 
+    @timer
     def fit(self, train_config):
         X_train = train_config.X
         y_train = train_config.y
@@ -31,6 +33,7 @@ class DecisionTree:
 
         return self
 
+    @timer
     def predict(self, X):
         return self.tree.predict(X)
 

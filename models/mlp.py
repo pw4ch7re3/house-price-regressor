@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from dataclasses import dataclass, field
 
 from models import ModelConfig
+from metrics.timer import timer
 
 
 @dataclass
@@ -54,6 +55,7 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.network(x)
 
+    @timer
     def fit(self, train_config):
         X_train = train_config.X
         y_train = train_config.y
@@ -95,6 +97,7 @@ class MLP(nn.Module):
 
         return self
 
+    @timer
     def predict(self, X):
         if hasattr(X, "values"):
             X = torch.as_tensor(X.values, dtype=torch.float32)
