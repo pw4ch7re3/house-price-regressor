@@ -1,6 +1,10 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+HOUSING_PATH = "data/raw/latlong_added.csv"
+PRICE_PATH = "data/processed/usa_housing_dataset_price.csv"
+PRICE_PER_SQFT_PATH = "data/processed/usa_housing_dataset_price_per_sqft.csv"
+
 
 def load_df(pathname: str):
     return pd.read_csv(pathname)
