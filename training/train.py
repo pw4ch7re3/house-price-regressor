@@ -5,16 +5,23 @@ import torch.optim as optim
 import os
 import sys
 import argparse
+import pandas as pd
 from typing import cast
 
 path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if path not in sys.path:
     sys.path.insert(0, path)
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-from data.dataload import load_df, drop_addr, drop_coord, split_X_y, split_train_test
-from data.preprocess import FILL_PATH, DROP_PATH, FILL_THEN_DROP_PATH
+from data.dataload import (
+    load_df,
+    target_encode,
+    split_X_y,
+    split_train_test,
+    PRICE_PATH,
+    PRICE_PER_SQFT_PATH,
+)
 from metrics.mse import rmse
 from metrics.r2_score import r2_score
 
@@ -22,91 +29,135 @@ from models import ModelConfig, TrainConfig
 from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
 
+# from models.mgbdt import mGBDTConfig, MGBDTModel
+
 # input_path = "data/processed"
 output_path = "models/best_models"
 
+MINMAX_COLS = [
+    "x",
+    "y",
+    "z",
+    "condition",
+    "age",
+    "bedrooms",
+    "bathrooms",
+    "floors",
+    "view",
+]
 
-def train(model_config: ModelConfig, train_config: TrainConfig):
+ZSCORE_COLS = [
+    "sqft_living",
+    "sqft_above",
+    "sqft_basement",
+    "log_sqft_lot",
+    "city",
+    "zipcode",
+]
+
+
+def train(model_config: ModelConfig, train_config: TrainConfig, target: str):
     model_name = model_config.model.lower()
     if model_name == "mlp":
         model = MLP(cast(MLPConfig, model_config))
     elif model_name in ("decision_tree", "decision tree", "dt"):
         model = DecisionTree(cast(DecisionTreeConfig, model_config))
     elif model_name == "mgbdt":
-        raise ValueError(f"TODO. implement mgbdt")
+        # TODO. Implement mgbdt
+        raise ValueError(f"Implement mgbdt")
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
     model.fit(train_config)
 
     os.makedirs(output_path, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(output_path, f"best_{model_name}.pth"))
+    torch.save(
+        model.state_dict(), os.path.join(output_path, f"best_{model_name}_{target}.pth")
+    )
 
     return model
 
 
 def main(args):
-    if args.null == "fill":
-        data_path = FILL_PATH
-    elif args.null == "drop":
-        data_path = DROP_PATH
-    elif args.null == "fill_then_drop":
-        data_path = FILL_THEN_DROP_PATH
-    else:
-        raise ValueError(f"Unknown null preprocess method: {args.null}")
+    for data_path in [PRICE_PATH, PRICE_PER_SQFT_PATH]:
+        df = load_df(data_path)
 
-    df = load_df(data_path)
+        # if args.drop_address:
+        #     df = drop_addr(df)
+        # if args.drop_coord:
+        #     df = drop_coord(df)
 
-    if args.drop_address:
-        df = drop_addr(df)
-    if args.drop_coord:
-        df = drop_coord(df)
+        X, y = split_X_y(df, args.target)
 
-    X, y = split_X_y(df, args.target)
+        # X = X[["bedrooms", "bathrooms", "floors"]]
 
-    # X = X[["bedrooms", "bathrooms", "floors"]]
+        (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
 
-    (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
+        # TODO. log 가격 변환
 
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
+        # Target Encoding
+        for col in ["city", "zipcode"]:
+            X_train[col], X_test[col] = target_encode(X_train, y_train, X_test, col)
 
-    train_config = TrainConfig(
-        X=X_train,
-        y=y_train,
-        epochs=args.epochs,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        verbose=args.verbose,
-    )
+        # Minmax Regularization
+        scaler_mm = MinMaxScaler()
+        X_train[MINMAX_COLS] = scaler_mm.fit_transform(X_train[MINMAX_COLS])
+        X_test[MINMAX_COLS] = scaler_mm.transform(X_test[MINMAX_COLS])
 
-    if args.model == "mlp":
-        model_config = MLPConfig(
-            model="mlp",
-            input_dim=X_train.shape[1],
-            hidden_dims=[32, 32],
-            output_dim=1,
+        # Z-score Regularization
+        scaler = StandardScaler()
+        X_train[ZSCORE_COLS] = scaler.fit_transform(X_train[ZSCORE_COLS])
+        X_test[ZSCORE_COLS] = scaler.transform(X_test[ZSCORE_COLS])
+
+        # DT regularization
+        if args.model == "dt":
+            X_train["age_bin"] = pd.cut(
+                X_train["age"], bins=5, labels=[0, 1, 2, 3, 4]
+            ).astype(float)
+            X_test["age_bin"] = pd.cut(
+                X_test["age"], bins=5, labels=[0, 1, 2, 3, 4]
+            ).astype(float)
+
+        train_config = TrainConfig(
+            X=X_train,
+            y=y_train,
+            epochs=args.epochs,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            verbose=args.verbose,
         )
-    elif args.model == "dt":
-        model_config = DecisionTreeConfig(
-            model="dt",
-            max_depth=args.max_depth,
-            min_samples_split=args.min_samples_split,
-            min_samples_leaf=args.min_samples_leaf,
-        )
-    else:
-        raise ValueError(f"Unknown model: {args.model}")
 
-    model = train(model_config, train_config)
+        if args.model == "mlp":
+            model_config = MLPConfig(
+                model="mlp",
+                input_dim=X_train.shape[1],
+                hidden_dims=[32, 32],
+                output_dim=1,
+            )
+        elif args.model == "dt":
+            model_config = DecisionTreeConfig(
+                model="dt",
+                max_depth=args.max_depth,
+                min_samples_split=args.min_samples_split,
+                min_samples_leaf=args.min_samples_leaf,
+            )
+        else:
+            raise ValueError(f"Unknown model: {args.model}")
 
-    y_train_pred = model.predict(X_train)
-    print(f"Train  RMSE: {rmse(y_train, y_train_pred):.4f}")
-    print(f"Train  R²:   {r2_score(y_train, y_train_pred):.4f}")
+        if data_path == PRICE_PATH:
+            model = train(model_config, train_config, "price")
+        else:
+            model = train(model_config, train_config, "price_per_sqft")
 
-    y_test_pred = model.predict(X_test)
-    print(f"Test  RMSE: {rmse(y_test, y_test_pred):.4f}")
-    print(f"Test  R²:   {r2_score(y_test, y_test_pred):.4f}")
+        # TODO. np.expm1() 역변환
+        y_train_pred = model.predict(X_train)
+        print(f"Train  RMSE: {rmse(y_train, y_train_pred):.4f}")
+        print(f"Train  R²:   {r2_score(y_train, y_train_pred):.4f}")
+
+        # TODO. np.expm1() 역변환
+        y_test_pred = model.predict(X_test)
+        print(f"Test  RMSE: {rmse(y_test, y_test_pred):.4f}")
+        print(f"Test  R²:   {r2_score(y_test, y_test_pred):.4f}")
 
 
 if __name__ == "__main__":
@@ -120,23 +171,16 @@ if __name__ == "__main__":
         help="model to train (mlp or dt)",
     )
 
-    parser.add_argument(
-        "--null",
-        type=str,
-        default="fill",
-        choices=["fill", "drop", "fill_then_drop"],
-        help="how to process null coordinates?",
-    )
-    parser.add_argument(
-        "--drop_address",
-        action="store_true",
-        help="drop address (city, street, statezip)",
-    )
-    parser.add_argument(
-        "--drop_coord",
-        action="store_true",
-        help="drop coord (x, y, z)",
-    )
+    # parser.add_argument(
+    #     "--drop_address",
+    #     action="store_true",
+    #     help="drop address (city, street, statezip)",
+    # )
+    # parser.add_argument(
+    #     "--drop_coord",
+    #     action="store_true",
+    #     help="drop coord (x, y, z)",
+    # )
 
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-2)
