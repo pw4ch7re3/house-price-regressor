@@ -6,6 +6,7 @@ import os
 import sys
 import argparse
 import pandas as pd
+import numpy as np
 from typing import cast
 
 path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,27 +34,6 @@ from models.decision_tree import DecisionTreeConfig, DecisionTree
 
 # input_path = "data/processed"
 output_path = "models/best_models"
-
-MINMAX_COLS = [
-    "x",
-    "y",
-    "z",
-    "condition",
-    "age",
-    "bedrooms",
-    "bathrooms",
-    "floors",
-    "view",
-]
-
-ZSCORE_COLS = [
-    "sqft_living",
-    "sqft_above",
-    "sqft_basement",
-    "log_sqft_lot",
-    "city",
-    "zipcode",
-]
 
 
 def train(model_config: ModelConfig, train_config: TrainConfig, target: str):
@@ -89,34 +69,12 @@ def main(args):
 
         X, y = split_X_y(df, args.target)
 
-        # X = X[["bedrooms", "bathrooms", "floors"]]
+        is_dt = args.model == "dt"
+        log = data_path == PRICE_PATH
 
-        (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
-
-        # TODO. log 가격 변환
-
-        # Target Encoding
-        for col in ["city", "zipcode"]:
-            X_train[col], X_test[col] = target_encode(X_train, y_train, X_test, col)
-
-        # Minmax Regularization
-        scaler_mm = MinMaxScaler()
-        X_train[MINMAX_COLS] = scaler_mm.fit_transform(X_train[MINMAX_COLS])
-        X_test[MINMAX_COLS] = scaler_mm.transform(X_test[MINMAX_COLS])
-
-        # Z-score Regularization
-        scaler = StandardScaler()
-        X_train[ZSCORE_COLS] = scaler.fit_transform(X_train[ZSCORE_COLS])
-        X_test[ZSCORE_COLS] = scaler.transform(X_test[ZSCORE_COLS])
-
-        # DT regularization
-        if args.model == "dt":
-            X_train["age_bin"] = pd.cut(
-                X_train["age"], bins=5, labels=[0, 1, 2, 3, 4]
-            ).astype(float)
-            X_test["age_bin"] = pd.cut(
-                X_test["age"], bins=5, labels=[0, 1, 2, 3, 4]
-            ).astype(float)
+        (X_train, y_train), (X_test, y_test) = split_train_test(
+            X, y, is_dt=is_dt, log=log
+        )
 
         train_config = TrainConfig(
             X=X_train,
@@ -149,13 +107,13 @@ def main(args):
         else:
             model = train(model_config, train_config, "price_per_sqft")
 
-        # TODO. np.expm1() 역변환
         y_train_pred = model.predict(X_train)
         print(f"Train  RMSE: {rmse(y_train, y_train_pred):.4f}")
         print(f"Train  R²:   {r2_score(y_train, y_train_pred):.4f}")
 
-        # TODO. np.expm1() 역변환
         y_test_pred = model.predict(X_test)
+        if log:
+            y_test_pred = np.expm1(y_test_pred)
         print(f"Test  RMSE: {rmse(y_test, y_test_pred):.4f}")
         print(f"Test  R²:   {r2_score(y_test, y_test_pred):.4f}")
 
