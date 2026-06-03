@@ -1,7 +1,13 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
+import os
+import sys
+
+# mgbdt 패키지(models/mgbdt/)와 프로젝트 루트를 sys.path에 추가
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MODELS_DIR = os.path.dirname(os.path.abspath(__file__))
+for _p in (_PROJECT_ROOT, _MODELS_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
@@ -27,7 +33,7 @@ class mGBDTConfig(ModelConfig):
     activation: str | None = field(default=None)
     max_depth: int = field(default=5)
     num_boost_round: int = field(default=1)
-    force_no_parallel: bool = field(default=False)
+    force_no_parallel: bool = field(default=True)
     
     
 class MGBDTModel: 
@@ -86,19 +92,19 @@ class MGBDTModel:
                     f"config.output_size ({cfg.output_size})."
                 )
  
-            F = self._build_model(model_type, in_size, out_size)
+            forward_model = self._build_model(model_type, in_size, out_size)
  
             if layer_type == "bp_layer":
                 mgbdt.add_layer(
                     "bp_layer",
-                    F=F,
+                    F=forward_model,
                 )
             else:
-                Finv = self._build_model(model_type, out_size, in_size)
+                inv_model = self._build_model(model_type, out_size, in_size)
                 mgbdt.add_layer(
                     "tp_layer",
-                    F=F,
-                    G=Finv,
+                    F=forward_model,
+                    G=inv_model,
                 )
             prev_out_size = out_size
  
@@ -181,45 +187,48 @@ class MGBDTModel:
  
  
 if __name__ == "__main__":
-    """ Usage Example """
-    import numpy as np
-    from sklearn.datasets import make_classification
+    """ Usage Example (regression) """
+    from sklearn.datasets import make_regression
     from sklearn.model_selection import train_test_split
- 
+    from sklearn.metrics import mean_squared_error
+
     np.random.seed(42)
- 
-    X, y_raw = make_classification(n_samples=1000, n_features=10, n_classes=3, n_informative=5, random_state=42)
-    y = np.eye(3)[y_raw]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
- 
+
+    X, y_raw = make_regression(n_samples=1000, n_features=10, noise=0.1, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y_raw, test_size=0.2, random_state=42)
+
+    # 1) 단일 TP 레이어 (regression 기본 구성)
     config = mGBDTConfig(
+        model="mGBDT",
         input_size=10,
-        output_size=3,
+        output_size=1,
+        task="regression",
         learning_rate=0.1,
         max_depth=4,
         num_boost_round=2,
-        loss="MSELoss",
     )
     wrapper = MGBDTModel(config, layer_configs=[("tp_layer", "xgb")], verbose=True)
     wrapper.init(X_train, n_rounds=1)
     wrapper.fit(X_train, y_train, n_epochs=5, eval_sets=[(X_test, y_test)])
     pred = wrapper.predict(X_test)
-    print("pred.shape:", pred.shape)
- 
+    print(f"[XGB TP] pred.shape={pred.shape}, MSE={mean_squared_error(y_test, pred):.4f}")
+
+    # 2) 2-레이어: hidden size를 중간에 지정
     config2 = mGBDTConfig(
+        model="mGBDT",
         input_size=10,
-        output_size=3,
+        output_size=1,
+        task="regression",
         learning_rate=0.05,
         max_depth=3,
         num_boost_round=1,
-        loss="CrossEntropyLoss",
-        optimizer="Adam",
     )
     wrapper2 = MGBDTModel(
         config2,
-        layer_configs=[("tp_layer", "xgb"), ("bp_layer", "linear")],
+        layer_configs=[("tp_layer", "xgb", 8), ("tp_layer", "xgb")],
         verbose=True,
     )
     wrapper2.init(X_train, n_rounds=1)
-    wrapper2.fit(X_train, y_train, n_epochs=3)
-    print(wrapper2)
+    wrapper2.fit(X_train, y_train, n_epochs=5)
+    pred2 = wrapper2.predict(X_test)
+    print(f"[XGB 2-layer] pred.shape={pred2.shape}, MSE={mean_squared_error(y_test, pred2):.4f}")
