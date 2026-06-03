@@ -183,6 +183,8 @@ def main(args):
         # Both train and test metrics are now in the original target space
         # TODO. Print all metrics
         ##나머지 metrics print##
+        n_features = X_train.shape[1]
+        
         print(f"Train RMSE:        {rmse(y_train_raw, y_train_pred):.4f}")
         print(f"Train MAE:         {mae(y_train_raw, y_train_pred):.4f}")
         print(f"Train MAPE:        {mape(y_train_raw, y_train_pred):.4f}")
