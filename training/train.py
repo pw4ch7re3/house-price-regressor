@@ -6,6 +6,7 @@ import os
 import sys
 import argparse
 import pandas as pd
+import numpy as np
 from typing import cast
 
 path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +17,8 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 from data.dataload import (
     load_df,
+    drop_addr,
+    drop_coord,
     target_encode,
     split_X_y,
     split_train_test,
@@ -56,7 +59,7 @@ ZSCORE_COLS = [
 ]
 
 
-def train(model_config: ModelConfig, train_config: TrainConfig, target: str):
+def train(model_config: ModelConfig, train_config: TrainConfig, target_name: str):
     model_name = model_config.model.lower()
     if model_name == "mlp":
         model = MLP(cast(MLPConfig, model_config))
@@ -72,7 +75,8 @@ def train(model_config: ModelConfig, train_config: TrainConfig, target: str):
 
     os.makedirs(output_path, exist_ok=True)
     torch.save(
-        model.state_dict(), os.path.join(output_path, f"best_{model_name}_{target}.pth")
+        model.state_dict(),
+        os.path.join(output_path, f"best_{model_name}_{target_name}.pth"),
     )
 
     return model
@@ -82,18 +86,19 @@ def main(args):
     for data_path in [PRICE_PATH, PRICE_PER_SQFT_PATH]:
         df = load_df(data_path)
 
-        # if args.drop_address:
-        #     df = drop_addr(df)
-        # if args.drop_coord:
-        #     df = drop_coord(df)
-
         X, y = split_X_y(df, args.target)
-
-        # X = X[["bedrooms", "bathrooms", "floors"]]
 
         (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
 
-        # TODO. log 가격 변환
+        # Target transformation (minmax)
+        y_train_raw = y_train
+        target_scaler = None
+        if data_path == PRICE_PATH:
+            target_scaler = MinMaxScaler()
+            y_train = pd.Series(
+                target_scaler.fit_transform(y_train.values.reshape(-1, 1)).ravel(),
+                index=y_train.index,
+            )
 
         # Target Encoding
         for col in ["city", "zipcode"]:
@@ -117,6 +122,13 @@ def main(args):
             X_test["age_bin"] = pd.cut(
                 X_test["age"], bins=5, labels=[0, 1, 2, 3, 4]
             ).astype(float)
+
+        if args.drop_address:
+            X_train = drop_addr(X_train)
+            X_test = drop_addr(X_test)
+        if args.drop_coord:
+            X_train = drop_coord(X_train)
+            X_test = drop_coord(X_test)
 
         train_config = TrainConfig(
             X=X_train,
@@ -149,13 +161,21 @@ def main(args):
         else:
             model = train(model_config, train_config, "price_per_sqft")
 
-        # TODO. np.expm1() 역변환
         y_train_pred = model.predict(X_train)
-        print(f"Train  RMSE: {rmse(y_train, y_train_pred):.4f}")
-        print(f"Train  R²:   {r2_score(y_train, y_train_pred):.4f}")
-
-        # TODO. np.expm1() 역변환
         y_test_pred = model.predict(X_test)
+
+        # Inverse-transform predictions back to the original price scale
+        if data_path == PRICE_PATH:
+            y_train_pred = target_scaler.inverse_transform(
+                np.asarray(y_train_pred).reshape(-1, 1)
+            ).ravel()
+            y_test_pred = target_scaler.inverse_transform(
+                np.asarray(y_test_pred).reshape(-1, 1)
+            ).ravel()
+
+        # Both train and test metrics are now in the original target space
+        print(f"Train RMSE: {rmse(y_train_raw, y_train_pred):.4f}")
+        print(f"Train R²:   {r2_score(y_train_raw, y_train_pred):.4f}")
         print(f"Test  RMSE: {rmse(y_test, y_test_pred):.4f}")
         print(f"Test  R²:   {r2_score(y_test, y_test_pred):.4f}")
 
@@ -171,16 +191,16 @@ if __name__ == "__main__":
         help="model to train (mlp or dt)",
     )
 
-    # parser.add_argument(
-    #     "--drop_address",
-    #     action="store_true",
-    #     help="drop address (city, street, statezip)",
-    # )
-    # parser.add_argument(
-    #     "--drop_coord",
-    #     action="store_true",
-    #     help="drop coord (x, y, z)",
-    # )
+    parser.add_argument(
+        "--drop_address",
+        action="store_true",
+        help="drop address (city, street, statezip)",
+    )
+    parser.add_argument(
+        "--drop_coord",
+        action="store_true",
+        help="drop coord (x, y, z)",
+    )
 
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-2)

@@ -22,7 +22,7 @@ def add_cartesian(housing: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
-    housing = housing[housing["price"] > 0]
+
     housing["price"] = housing["price"] / housing["sqft_living"]
     housing = housing[housing["price"] < 1000]
     return housing
@@ -85,6 +85,7 @@ def print_column_descriptions(df: pd.DataFrame) -> None:
 def main() -> None:
     housing = load_df(HOUSING_PATH)
     housing = add_cartesian(housing)
+    housing = housing[housing["price"] > 0]
     housing_sqft = normalize_price(housing.copy())
 
     housing = drop_missing_coords(housing)

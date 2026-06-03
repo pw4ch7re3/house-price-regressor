@@ -11,7 +11,7 @@ def load_df(pathname: str):
 
 
 def drop_addr(df: pd.DataFrame):
-    return df.drop(columns=["street", "city", "statezip"])
+    return df.drop(columns=["city", "zipcode"])
 
 
 def drop_coord(df: pd.DataFrame):
