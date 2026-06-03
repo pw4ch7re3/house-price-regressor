@@ -12,15 +12,15 @@ class OnlineXGB(XGBModel):
         if extra_params is not None:
             for k, v in extra_params.items():
                 params[k] = v
-        params.pop("n_estimators")
+        params.pop("n_estimators", None)
 
         if callable(self.objective):
             obj = _objective_decorator(self.objective)
-            params["objective"] = "reg:linear"
+            params["objective"] = "reg:squarederror"
         else:
             obj = None
 
-        if self._Booster is None:
+        if getattr(self, "_Booster", None) is None:
             self._Booster = train(
                     params=params,
                     dtrain=trainDmatrix,
@@ -36,6 +36,6 @@ class OnlineXGB(XGBModel):
         return self
 
     def predict(self, X):
-        if self._Booster is None:
+        if getattr(self, "_Booster", None) is None:
             return np.full((X.shape[0],), self.base_score)
         return super(OnlineXGB, self).predict(X)
