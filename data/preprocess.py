@@ -22,14 +22,26 @@ def add_cartesian(housing: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
-
     housing["price"] = housing["price"] / housing["sqft_living"]
-    housing = housing[housing["price"] < 1000]
+    # housing = housing[housing["price"] < 1000]
     return housing
 
 
 def drop_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
     return housing.dropna(subset=["x", "y", "z"])
+
+
+def drop_price_outliers(
+    housing: pd.DataFrame, upper_quantile: float = 0.995
+) -> pd.DataFrame:
+    cap = housing["price"].quantile(upper_quantile)
+    n_before = len(housing)
+    housing = housing[housing["price"] <= cap]
+    print(
+        f"drop_price_outliers: q{upper_quantile} cap={cap:.2f} "
+        f"removed={n_before - len(housing)} ({n_before} -> {len(housing)})"
+    )
+    return housing
 
 
 def misc(housing: pd.DataFrame) -> pd.DataFrame:
@@ -87,6 +99,9 @@ def main() -> None:
     housing = add_cartesian(housing)
     housing = housing[housing["price"] > 0]
     housing_sqft = normalize_price(housing.copy())
+
+    housing = drop_price_outliers(housing)
+    housing_sqft = drop_price_outliers(housing_sqft)
 
     housing = drop_missing_coords(housing)
     housing_sqft = drop_missing_coords(housing_sqft)

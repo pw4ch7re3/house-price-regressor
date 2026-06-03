@@ -28,6 +28,12 @@ from data.dataload import (
 from metrics.mse import rmse
 from metrics.r2_score import r2_score
 
+# TODO. import required metrics
+# from metrics.mae import mae
+# from metrics.mape import mape
+# from metrics.adjusted_r2 import adjusted_r2
+
+
 from models import ModelConfig, TrainConfig
 from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
@@ -174,6 +180,7 @@ def main(args):
             ).ravel()
 
         # Both train and test metrics are now in the original target space
+        # TODO. Print all metrics
         print(f"Train RMSE: {rmse(y_train_raw, y_train_pred):.4f}")
         print(f"Train R²:   {r2_score(y_train_raw, y_train_pred):.4f}")
         print(f"Test  RMSE: {rmse(y_test, y_test_pred):.4f}")
