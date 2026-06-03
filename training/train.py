@@ -182,10 +182,19 @@ def main(args):
 
         # Both train and test metrics are now in the original target space
         # TODO. Print all metrics
-        print(f"Train RMSE: {rmse(y_train_raw, y_train_pred):.4f}")
-        print(f"Train R²:   {r2_score(y_train_raw, y_train_pred):.4f}")
-        print(f"Test  RMSE: {rmse(y_test, y_test_pred):.4f}")
-        print(f"Test  R²:   {r2_score(y_test, y_test_pred):.4f}")
+        ##나머지 metrics print##
+        print(f"Train RMSE:        {rmse(y_train_raw, y_train_pred):.4f}")
+        print(f"Train MAE:         {mae(y_train_raw, y_train_pred):.4f}")
+        print(f"Train MAPE:        {mape(y_train_raw, y_train_pred):.4f}")
+        print(f"Train R²:          {r2_score(y_train_raw, y_train_pred):.4f}")
+        print(f"Train Adjusted R²: {adjusted_r2(y_train_raw, y_train_pred, n_features):.4f}")
+
+        print(f"Test  RMSE:        {rmse(y_test, y_test_pred):.4f}")
+        print(f"Test  MAE:         {mae(y_test, y_test_pred):.4f}")
+        print(f"Test  MAPE:        {mape(y_test, y_test_pred):.4f}")
+        print(f"Test  R²:          {r2_score(y_test, y_test_pred):.4f}")
+        print(f"Test  Adjusted R²: {adjusted_r2(y_test, y_test_pred, n_features):.4f}")
+
 
 
 if __name__ == "__main__":
