@@ -29,9 +29,10 @@ from metrics.mse import rmse
 from metrics.r2_score import r2_score
 
 # TODO. import required metrics
-# from metrics.mae import mae
-# from metrics.mape import mape
-# from metrics.adjusted_r2 import adjusted_r2
+##아래 3개 import함##
+from metrics.mae import mae
+from metrics.mape import mape
+from metrics.adjusted_r2 import adjusted_r2
 
 
 from models import ModelConfig, TrainConfig
