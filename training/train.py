@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import os
 import sys
+import random
 import argparse
 import pandas as pd
 import numpy as np
@@ -25,21 +26,13 @@ from data.dataload import (
     PRICE_PATH,
     PRICE_PER_SQFT_PATH,
 )
-from metrics.mse import rmse
-from metrics.r2_score import r2_score
-
-# TODO. import required metrics
-##아래 3개 import함##
-from metrics.mae import mae
-from metrics.mape import mape
-from metrics.adjusted_r2 import adjusted_r2
-
-
 from models import ModelConfig, TrainConfig
 from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
 
-# from models.mgbdt import mGBDTConfig, MGBDTModel
+from models.mgbdt_ours import mGBDTConfig, MGBDTModel
+
+from training.record import print_metrics
 
 # input_path = "data/processed"
 output_path = "models/best_models"
@@ -70,15 +63,17 @@ def train(model_config: ModelConfig, train_config: TrainConfig, target_name: str
     model_name = model_config.model.lower()
     if model_name == "mlp":
         model = MLP(cast(MLPConfig, model_config))
+        model.fit(train_config)
     elif model_name in ("decision_tree", "decision tree", "dt"):
         model = DecisionTree(cast(DecisionTreeConfig, model_config))
+        model.fit(train_config)
     elif model_name == "mgbdt":
-        # TODO. Implement mgbdt
-        raise ValueError(f"Implement mgbdt")
+        model = MGBDTModel(
+            cast(mGBDTConfig, model_config), verbose=train_config.verbose
+        )
+        model.fit(train_config)
     else:
         raise ValueError(f"Unknown model: {model_name}")
-
-    model.fit(train_config)
 
     os.makedirs(output_path, exist_ok=True)
     torch.save(
@@ -89,11 +84,20 @@ def train(model_config: ModelConfig, train_config: TrainConfig, target_name: str
     return model
 
 
+def set_seed(seed: int = 42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
 def main(args):
+    set_seed(args.seed)
+
     for data_path in [PRICE_PATH, PRICE_PER_SQFT_PATH]:
         df = load_df(data_path)
 
-        X, y = split_X_y(df, args.target)
+        X, y = split_X_y(df, "price")
 
         (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
 
@@ -141,7 +145,7 @@ def main(args):
             X=X_train,
             y=y_train,
             epochs=args.epochs,
-            lr=args.lr,
+            lr=args.lr_mlp,
             batch_size=args.batch_size,
             verbose=args.verbose,
         )
@@ -156,9 +160,20 @@ def main(args):
         elif args.model == "dt":
             model_config = DecisionTreeConfig(
                 model="dt",
-                max_depth=args.max_depth,
+                max_depth=args.max_depth_dt,
                 min_samples_split=args.min_samples_split,
                 min_samples_leaf=args.min_samples_leaf,
+            )
+        elif args.model == "mgbdt":
+            model_config = mGBDTConfig(
+                model="mgbdt",
+                input_size=X_train.shape[1],
+                output_size=1,
+                task="regression",
+                learning_rate=args.lr_mgbdt,
+                max_depth=args.max_depth_mgbdt,
+                num_boost_round=args.num_boost_round,
+                target_lr=args.target_lr,
             )
         else:
             raise ValueError(f"Unknown model: {args.model}")
@@ -180,34 +195,34 @@ def main(args):
                 np.asarray(y_test_pred).reshape(-1, 1)
             ).ravel()
 
-        # Both train and test metrics are now in the original target space
-        # TODO. Print all metrics
-        ##나머지 metrics print##
         n_features = X_train.shape[1]
-        
-        print(f"Train RMSE:        {rmse(y_train_raw, y_train_pred):.4f}")
-        print(f"Train MAE:         {mae(y_train_raw, y_train_pred):.4f}")
-        print(f"Train MAPE:        {mape(y_train_raw, y_train_pred):.4f}")
-        print(f"Train R²:          {r2_score(y_train_raw, y_train_pred):.4f}")
-        print(f"Train Adjusted R²: {adjusted_r2(y_train_raw, y_train_pred, n_features):.4f}")
+        target_name = "price" if data_path == PRICE_PATH else "price_per_sqft"
 
-        print(f"Test  RMSE:        {rmse(y_test, y_test_pred):.4f}")
-        print(f"Test  MAE:         {mae(y_test, y_test_pred):.4f}")
-        print(f"Test  MAPE:        {mape(y_test, y_test_pred):.4f}")
-        print(f"Test  R²:          {r2_score(y_test, y_test_pred):.4f}")
-        print(f"Test  Adjusted R²: {adjusted_r2(y_test, y_test_pred, n_features):.4f}")
-
+        print_metrics(
+            target_name,
+            args.model,
+            args.drop_address,
+            args.drop_coord,
+            y_train_raw,
+            y_train_pred,
+            y_test,
+            y_test_pred,
+            n_features,
+        )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a house price regression model")
-    parser.add_argument("--target", type=str, default="price")
+    # parser.add_argument("--target", type=str, default="price")
+    parser.add_argument(
+        "--seed", type=int, default=42, help="global random seed for reproducibility"
+    )
     parser.add_argument(
         "--model",
         type=str,
         default="mlp",
-        choices=["mlp", "dt"],
-        help="model to train (mlp or dt)",
+        choices=["mlp", "dt", "mgbdt"],
+        help="model to train (mlp, dt or mgbdt)",
     )
 
     parser.add_argument(
@@ -221,12 +236,20 @@ if __name__ == "__main__":
         help="drop coord (x, y, z)",
     )
 
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument(
+        "--lr_mlp", type=float, default=1e-2, help="learning rate for mlp (Adam)"
+    )
+    parser.add_argument(
+        "--lr_mgbdt", type=float, default=0.1, help="learning rate for mgbdt (xgb)"
+    )
     parser.add_argument("--batch_size", type=int, default=16)
 
     parser.add_argument(
-        "--max_depth", type=int, default=6, help="max depth for decision tree"
+        "--max_depth_dt", type=int, default=6, help="max depth for decision tree"
+    )
+    parser.add_argument(
+        "--max_depth_mgbdt", type=int, default=5, help="max depth for mgbdt (xgb)"
     )
     parser.add_argument(
         "--min_samples_split",
@@ -239,6 +262,19 @@ if __name__ == "__main__":
         type=int,
         default=2,
         help="min samples per leaf for decision tree",
+    )
+
+    parser.add_argument(
+        "--num_boost_round",
+        type=int,
+        default=5,
+        help="num boost rounds per layer for mgbdt",
+    )
+    parser.add_argument(
+        "--target_lr",
+        type=float,
+        default=0.5,
+        help="target-propagation step size for mgbdt",
     )
 
     parser.add_argument("--verbose", action="store_true")

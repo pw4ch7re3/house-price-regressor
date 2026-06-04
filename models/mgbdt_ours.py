@@ -34,6 +34,11 @@ class mGBDTConfig(ModelConfig):
     max_depth: int = field(default=5)
     num_boost_round: int = field(default=1)
     force_no_parallel: bool = field(default=True)
+    # Target-propagation step size. For single-layer MSE regression, 0.5 makes
+    # the fit target equal to y each epoch (Ht = pred - target_lr*2*(pred-y));
+    # smaller values move targets only partway toward y and cause underfitting.
+    target_lr: float = field(default=0.5)
+    epsilon: float = field(default=0.3)
     
     
 class MGBDTModel: 
@@ -41,13 +46,13 @@ class MGBDTModel:
         self,
         config: mGBDTConfig,
         layer_configs: Optional[list] = None,
-        target_lr: float = 0.1,
-        epsilon: float = 0.3,
+        target_lr: Optional[float] = None,
+        epsilon: Optional[float] = None,
         verbose: bool = False,
     ):
         self.config = config
-        self.target_lr = target_lr
-        self.epsilon = epsilon
+        self.target_lr = target_lr if target_lr is not None else config.target_lr
+        self.epsilon = epsilon if epsilon is not None else config.epsilon
         self.verbose = verbose
  
         if layer_configs is None:
@@ -168,7 +173,15 @@ class MGBDTModel:
         )
  
     @timer
-    def fit(self, X, y, n_epochs: int = 10, eval_sets=None, **kwargs):
+    def fit(self, train_config):
+        """Unified interface matching MLP/DecisionTree: runs init + boosting
+        from a TrainConfig in a single call."""
+        self.init(train_config.X)
+        return self.fit_arrays(
+            train_config.X, train_config.y, n_epochs=train_config.epochs
+        )
+
+    def fit_arrays(self, X, y, n_epochs: int = 10, eval_sets=None, **kwargs):
         X = self._prepare_X(X)
         y = self._prepare_y(y)
         eval_sets = self._prepare_eval_sets(eval_sets)
@@ -182,6 +195,13 @@ class MGBDTModel:
             return pred[:, 0]
         return pred
  
+    def state_dict(self):
+        return {
+            "model": self.model,
+            "config": self.config,
+            "layer_configs": self.layer_configs,
+        }
+
     def __repr__(self):
         return f"MGBDTModel(config={self.config}, layer_configs={self.layer_configs})\n{self.model}"
  
@@ -209,7 +229,7 @@ if __name__ == "__main__":
     )
     wrapper = MGBDTModel(config, layer_configs=[("tp_layer", "xgb")], verbose=True)
     wrapper.init(X_train, n_rounds=1)
-    wrapper.fit(X_train, y_train, n_epochs=5, eval_sets=[(X_test, y_test)])
+    wrapper.fit_arrays(X_train, y_train, n_epochs=5, eval_sets=[(X_test, y_test)])
     pred = wrapper.predict(X_test)
     print(f"[XGB TP] pred.shape={pred.shape}, MSE={mean_squared_error(y_test, pred):.4f}")
 
@@ -229,6 +249,6 @@ if __name__ == "__main__":
         verbose=True,
     )
     wrapper2.init(X_train, n_rounds=1)
-    wrapper2.fit(X_train, y_train, n_epochs=5)
+    wrapper2.fit_arrays(X_train, y_train, n_epochs=5)
     pred2 = wrapper2.predict(X_test)
     print(f"[XGB 2-layer] pred.shape={pred2.shape}, MSE={mean_squared_error(y_test, pred2):.4f}")
