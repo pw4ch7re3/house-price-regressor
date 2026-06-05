@@ -29,6 +29,7 @@ from data.dataload import (
 from models import ModelConfig, TrainConfig
 from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
+from models.random_forest import RandomForestConfig, RandomForest
 
 from models.mgbdt_ours import mGBDTConfig, MGBDTModel
 
@@ -67,9 +68,14 @@ def train(model_config: ModelConfig, train_config: TrainConfig, target_name: str
     elif model_name in ("decision_tree", "decision tree", "dt"):
         model = DecisionTree(cast(DecisionTreeConfig, model_config))
         model.fit(train_config)
+    elif model_name in ("random_forest", "random forest", "rf"):
+        model = RandomForest(cast(RandomForestConfig, model_config))
+        model.fit(train_config)
     elif model_name == "mgbdt":
         model = MGBDTModel(
-            cast(mGBDTConfig, model_config), verbose=train_config.verbose
+            cast(mGBDTConfig, model_config),
+            layer_configs=[("tp_layer", "xgb", 8), ("tp_layer", "xgb")],
+            verbose=train_config.verbose,
         )
         model.fit(train_config)
     else:
@@ -101,15 +107,17 @@ def main(args):
 
         (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
 
-        # Target transformation (minmax)
+        # Target transformation (minmax). Always scale the target: the linear
+        # mGBDT path takes SGD steps whose gradients scale with the target
+        # magnitude, so an unnormalized target (e.g. price_per_sqft ~ hundreds)
+        # makes the loss diverge to inf/nan. XGB is scale-invariant and hides
+        # this, but linear is not.
         y_train_raw = y_train
-        target_scaler = None
-        if data_path == PRICE_PATH:
-            target_scaler = MinMaxScaler()
-            y_train = pd.Series(
-                target_scaler.fit_transform(y_train.values.reshape(-1, 1)).ravel(),
-                index=y_train.index,
-            )
+        target_scaler = MinMaxScaler()
+        y_train = pd.Series(
+            target_scaler.fit_transform(y_train.values.reshape(-1, 1)).ravel(),
+            index=y_train.index,
+        )
 
         # Target Encoding
         for col in ["city", "zipcode"]:
@@ -164,6 +172,14 @@ def main(args):
                 min_samples_split=args.min_samples_split,
                 min_samples_leaf=args.min_samples_leaf,
             )
+        elif args.model == "rf":
+            model_config = RandomForestConfig(
+                model="rf",
+                n_estimators=args.n_estimators,
+                max_depth=args.max_depth_rf,
+                min_samples_split=args.min_samples_split,
+                min_samples_leaf=args.min_samples_leaf,
+            )
         elif args.model == "mgbdt":
             model_config = mGBDTConfig(
                 model="mgbdt",
@@ -186,14 +202,13 @@ def main(args):
         y_train_pred = model.predict(X_train)
         y_test_pred = model.predict(X_test)
 
-        # Inverse-transform predictions back to the original price scale
-        if data_path == PRICE_PATH:
-            y_train_pred = target_scaler.inverse_transform(
-                np.asarray(y_train_pred).reshape(-1, 1)
-            ).ravel()
-            y_test_pred = target_scaler.inverse_transform(
-                np.asarray(y_test_pred).reshape(-1, 1)
-            ).ravel()
+        # Inverse-transform predictions back to the original target scale
+        y_train_pred = target_scaler.inverse_transform(
+            np.asarray(y_train_pred).reshape(-1, 1)
+        ).ravel()
+        y_test_pred = target_scaler.inverse_transform(
+            np.asarray(y_test_pred).reshape(-1, 1)
+        ).ravel()
 
         n_features = X_train.shape[1]
         target_name = "price" if data_path == PRICE_PATH else "price_per_sqft"
@@ -221,8 +236,8 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default="mlp",
-        choices=["mlp", "dt", "mgbdt"],
-        help="model to train (mlp, dt or mgbdt)",
+        choices=["mlp", "dt", "rf", "mgbdt"],
+        help="model to train (mlp, dt, rf or mgbdt)",
     )
 
     parser.add_argument(
@@ -247,6 +262,15 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--max_depth_dt", type=int, default=6, help="max depth for decision tree"
+    )
+    parser.add_argument(
+        "--max_depth_rf", type=int, default=None, help="max depth for random forest"
+    )
+    parser.add_argument(
+        "--n_estimators",
+        type=int,
+        default=100,
+        help="number of trees for random forest",
     )
     parser.add_argument(
         "--max_depth_mgbdt", type=int, default=5, help="max depth for mgbdt (xgb)"
