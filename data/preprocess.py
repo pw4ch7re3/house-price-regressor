@@ -27,20 +27,29 @@ def normalize_price(housing: pd.DataFrame) -> pd.DataFrame:
     return housing
 
 
-def drop_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
-    return housing.dropna(subset=["x", "y", "z"])
+def fill_missing_coords(housing: pd.DataFrame) -> pd.DataFrame:
+    housing = housing.copy()
+    for col in ["x", "y", "z"]:
+        city_mean = housing.groupby("city")[col].transform("mean")
+        housing[col] = housing[col].fillna(city_mean)
+        # fall back to global mean for cities with no valid coords
+        housing[col] = housing[col].fillna(housing[col].mean())
+    return housing
 
 
 def drop_price_outliers(
-    housing: pd.DataFrame, upper_quantile: float = 0.995
+    housing: pd.DataFrame, upper_quantile: float = 0.999
 ) -> pd.DataFrame:
     cap = housing["price"].quantile(upper_quantile)
     n_before = len(housing)
+    dropped_idx = housing.index[housing["price"] > cap]
     housing = housing[housing["price"] <= cap]
     print(
         f"drop_price_outliers: q{upper_quantile} cap={cap:.2f} "
-        f"removed={n_before - len(housing)} ({n_before} -> {len(housing)})"
+        f"removed={n_before - len(housing)} ({n_before} -> {len(housing)}) "
+        f"max={housing['price'].max():.2f}"
     )
+    print(f"  dropped index: {dropped_idx.tolist()}")
     return housing
 
 
@@ -103,8 +112,8 @@ def main() -> None:
     housing = drop_price_outliers(housing)
     housing_sqft = drop_price_outliers(housing_sqft)
 
-    housing = drop_missing_coords(housing)
-    housing_sqft = drop_missing_coords(housing_sqft)
+    housing = fill_missing_coords(housing)
+    housing_sqft = fill_missing_coords(housing_sqft)
 
     housing = misc(housing)
     housing_sqft = misc(housing_sqft)

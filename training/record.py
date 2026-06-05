@@ -70,6 +70,44 @@ def save_metrics(
                 )
 
 
+def save_split_metrics(
+    target_name, model_name, drop_address, drop_coord, split, metrics
+):
+    """Append a single split's metrics (e.g. cross-validation mean) to the CSV."""
+    os.makedirs(os.path.dirname(METRICS_PATH), exist_ok=True)
+    file_exists = os.path.exists(METRICS_PATH)
+    timestamp = datetime.now().isoformat(timespec="seconds")
+
+    with open(METRICS_PATH, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(
+                [
+                    "timestamp",
+                    "model",
+                    "target",
+                    "drop_address",
+                    "drop_coord",
+                    "split",
+                    "metric",
+                    "value",
+                ]
+            )
+        for metric, value in metrics.items():
+            writer.writerow(
+                [
+                    timestamp,
+                    model_name,
+                    target_name,
+                    int(drop_address),
+                    int(drop_coord),
+                    split,
+                    metric,
+                    value,
+                ]
+            )
+
+
 def print_metrics(
     target_name,
     model_name,
