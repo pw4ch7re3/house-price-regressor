@@ -1,8 +1,5 @@
-import json
-
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 from dataload import (
     load_df,
@@ -10,17 +7,11 @@ from dataload import (
     target_encode,
     split_X_y,
     split_train_test,
-    target_scaler_path,
     HOUSING_PATH,
     PRICE_PATH,
     VARIANT_PATHS,
     TARGET,
 )
-
-
-# Feature scaling column lists (shared with the old train.py behaviour).
-MINMAX_COLS = ["x", "y", "z", "condition", "age", "bedrooms", "bathrooms", "floors", "view"]
-ZSCORE_COLS = ["sqft_living", "sqft_above", "sqft_basement", "log_sqft_lot", "city", "zipcode"]
 
 
 def latlong2cartesian(lat, long):
@@ -85,23 +76,6 @@ def misc(housing: pd.DataFrame) -> pd.DataFrame:
     return housing
 
 
-def scale_features(X_train: pd.DataFrame, X_test: pd.DataFrame):
-    """MinMax + Z-score scaling, fit on train, applied to both. Only columns
-    actually present are scaled (the cat variant drops x/y/z)."""
-    minmax_cols = [c for c in MINMAX_COLS if c in X_train.columns]
-    zscore_cols = [c for c in ZSCORE_COLS if c in X_train.columns]
-
-    mm = MinMaxScaler()
-    X_train[minmax_cols] = mm.fit_transform(X_train[minmax_cols])
-    X_test[minmax_cols] = mm.transform(X_test[minmax_cols])
-
-    zs = StandardScaler()
-    X_train[zscore_cols] = zs.fit_transform(X_train[zscore_cols])
-    X_test[zscore_cols] = zs.transform(X_test[zscore_cols])
-
-    return X_train, X_test
-
-
 def build_variant(
     X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Series, variant: str
 ):
@@ -110,7 +84,8 @@ def build_variant(
     - ``cat``: ordinal city/zipcode codes, no cartesian coordinates.
     - ``tgt``: target-encoded city/zipcode (fit on train) plus x/y/z.
 
-    Returns scaled ``(X_train, X_test)`` (target scaling handled separately).
+    Returns the RAW ``(X_train, X_test)``. Feature and target scaling are applied
+    at train time (see dataload.scale_features / scale_target).
     """
     X_train, X_test = X_train.copy(), X_test.copy()
 
@@ -122,14 +97,14 @@ def build_variant(
     else:
         raise ValueError(f"Unknown variant: {variant}")
 
-    return scale_features(X_train, X_test)
+    return X_train, X_test
 
 
-def write_variant(variant, X_train, X_test, y_train_scaled, y_test_scaled):
+def write_variant(variant, X_train, X_test, y_train, y_test):
     train_df = X_train.copy()
-    train_df[TARGET] = y_train_scaled
+    train_df[TARGET] = y_train
     test_df = X_test.copy()
-    test_df[TARGET] = y_test_scaled
+    test_df[TARGET] = y_test
 
     train_df.to_csv(VARIANT_PATHS[variant]["train"], index=False)
     test_df.to_csv(VARIANT_PATHS[variant]["test"], index=False)
@@ -184,28 +159,11 @@ def main() -> None:
     X, y = split_X_y(housing, TARGET)
     (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
 
-    # Target MinMax scaling, fit on train; persist params for inverse-transform.
-    target_scaler = MinMaxScaler()
-    y_train_scaled = pd.Series(
-        target_scaler.fit_transform(y_train.values.reshape(-1, 1)).ravel(),
-        index=y_train.index,
-        name=TARGET,
-    )
-    y_test_scaled = pd.Series(
-        target_scaler.transform(y_test.values.reshape(-1, 1)).ravel(),
-        index=y_test.index,
-        name=TARGET,
-    )
-    scaler_params = {
-        "min": float(target_scaler.data_min_[0]),
-        "max": float(target_scaler.data_max_[0]),
-    }
-
+    # Materialize each variant on its raw scale. Feature and target scaling are
+    # deferred to train time (training/train.py, training/train_ensemble.py).
     for variant in VARIANT_PATHS:
         Xtr_v, Xte_v = build_variant(X_train, X_test, y_train, variant)
-        write_variant(variant, Xtr_v, Xte_v, y_train_scaled, y_test_scaled)
-        with open(target_scaler_path(variant), "w") as f:
-            json.dump(scaler_params, f)
+        write_variant(variant, Xtr_v, Xte_v, y_train, y_test)
 
     print_column_descriptions(housing)
 

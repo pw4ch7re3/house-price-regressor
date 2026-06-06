@@ -4,55 +4,35 @@ import sys
 import random
 import argparse
 import numpy as np
-from typing import cast
-
-from sklearn.model_selection import KFold
 
 path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if path not in sys.path:
     sys.path.insert(0, path)
 
-from data.dataload import (
-    load_df,
-    drop_addr,
-    drop_coord,
-    split_X_y,
-    split_train_test,
-    PRICE_PATH,
-)
-from models import ModelConfig, TrainConfig
+from data.dataload import load_variant
+from models import TrainConfig
 from models.random_forest import RandomForestConfig, RandomForest
 
 from metrics.mse import rmse
-from training.record import (
-    compute_metrics,
-    print_metrics,
-    save_split_metrics,
-    METRIC_LABELS,
-)
+from training.record import print_metrics
 
 output_path = "models/best_models"
 
-# Targets reported by the ensemble: the direct price model, the
-# price_per_sqft model, and the blended ensemble.
+# Targets reported by the ensemble: the direct price model, the price_per_sqft
+# model, and the blended ensemble.
 TARGETS = ["price", "price_per_sqft", "price_ensemble"]
 
 
-def fit_model(model_config: ModelConfig, train_config: TrainConfig):
-    model = RandomForest(cast(RandomForestConfig, model_config))
-    model.fit(train_config)
-    return model
-
-
-def train(model_config: ModelConfig, train_config: TrainConfig, target_name: str):
-    model = fit_model(model_config, train_config)
+def fit_rf(model_config: RandomForestConfig, X_train, y_train, save_name: str):
+    """Fit a RandomForest on raw (unscaled) values and persist its state dict.
+    RandomForest is invariant to per-feature scaling and to target scaling, so
+    everything is trained directly on raw price / price_per_sqft."""
+    model = RandomForest(model_config)
+    # RandomForest.fit only reads X and y; epochs/lr are unused placeholders.
+    model.fit(TrainConfig(X=X_train, y=y_train, epochs=0, lr=0.0))
 
     os.makedirs(output_path, exist_ok=True)
-    torch.save(
-        model.state_dict(),
-        os.path.join(output_path, f"ensemble_rf_{target_name}.pth"),
-    )
-
+    torch.save(model.state_dict(), os.path.join(output_path, f"{save_name}.pth"))
     return model
 
 
@@ -67,109 +47,6 @@ def optimize_weight(y_true, price_pred, price_from_pps_pred, steps: int = 101):
     return best_w, best_rmse
 
 
-def train_and_predict(
-    X_tr, y_tr, X_ev, y_ev, drop_address, model_config, base_train_kwargs, save_models
-):
-    """Train both models on (X_tr, y_tr), blend, and return predictions for the
-    train and eval splits keyed by target. y_tr/y_ev are the raw price."""
-    # Model 2 target: price per square foot of living area.
-    y_pps_tr = y_tr / X_tr["sqft_living"]
-    y_pps_ev = y_ev / X_ev["sqft_living"]
-
-    # Keep sqft_living to convert price_per_sqft predictions back to price.
-    sqft_tr = X_tr["sqft_living"].to_numpy()
-    sqft_ev = X_ev["sqft_living"].to_numpy()
-
-    if drop_address:
-        X_tr = drop_addr(X_tr)
-        X_ev = drop_addr(X_ev)
-    # Baseline always drops coordinates.
-    X_tr = drop_coord(X_tr)
-    X_ev = drop_coord(X_ev)
-
-    builder = train if save_models else (
-        lambda mc, tc, name: fit_model(mc, tc)
-    )
-
-    model1 = builder(
-        model_config, TrainConfig(X=X_tr, y=y_tr, **base_train_kwargs), "price"
-    )
-    model2 = builder(
-        model_config,
-        TrainConfig(X=X_tr, y=y_pps_tr, **base_train_kwargs),
-        "price_per_sqft",
-    )
-
-    price1_tr = model1.predict(X_tr)
-    price1_ev = model1.predict(X_ev)
-
-    pps2_tr = model2.predict(X_tr)
-    pps2_ev = model2.predict(X_ev)
-    price2_tr = pps2_tr * sqft_tr
-    price2_ev = pps2_ev * sqft_ev
-
-    best_w, _ = optimize_weight(y_tr, price1_tr, price2_tr)
-    ens_tr = best_w * price1_tr + (1.0 - best_w) * price2_tr
-    ens_ev = best_w * price1_ev + (1.0 - best_w) * price2_ev
-
-    preds = {
-        "price": (y_tr, price1_tr, y_ev, price1_ev),
-        "price_per_sqft": (y_pps_tr, pps2_tr, y_pps_ev, pps2_ev),
-        "price_ensemble": (y_tr, ens_tr, y_ev, ens_ev),
-    }
-    return preds, best_w, X_tr.shape[1]
-
-
-def cross_validate(
-    X_train, y_train, drop_address, model_config, base_train_kwargs, k_folds, seed
-):
-    """Run k-fold CV on the training set, returning per-target lists of the
-    validation-fold metric dicts and the per-fold weights."""
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
-    fold_metrics = {t: [] for t in TARGETS}
-    weights = []
-
-    for fold, (tr_idx, val_idx) in enumerate(kf.split(X_train), start=1):
-        X_tr, y_tr = X_train.iloc[tr_idx], y_train.iloc[tr_idx]
-        X_val, y_val = X_train.iloc[val_idx], y_train.iloc[val_idx]
-
-        preds, w, n_features = train_and_predict(
-            X_tr, y_tr, X_val, y_val, drop_address, model_config, base_train_kwargs,
-            save_models=False,
-        )
-        weights.append(w)
-        for target in TARGETS:
-            _, _, y_val_true, y_val_pred = preds[target]
-            fold_metrics[target].append(
-                compute_metrics(y_val_true, y_val_pred, n_features)
-            )
-        print(f"  fold {fold}/{k_folds}: w={w:.4f}")
-
-    return fold_metrics, weights
-
-
-def report_cv(fold_metrics, weights, drop_address, k_folds):
-    """Print mean +/- std of validation metrics across folds and save the mean."""
-    print(
-        f"\n=== {k_folds}-fold CV on train set | weight mean: "
-        f"{np.mean(weights):.4f} +/- {np.std(weights):.4f} ==="
-    )
-    for target in TARGETS:
-        metric_keys = fold_metrics[target][0].keys()
-        means = {
-            m: float(np.mean([fm[m] for fm in fold_metrics[target]]))
-            for m in metric_keys
-        }
-        stds = {
-            m: float(np.std([fm[m] for fm in fold_metrics[target]]))
-            for m in metric_keys
-        }
-        print(f"--- ensemble | {target} (CV val) ---")
-        for m in metric_keys:
-            print(f"CV {METRIC_LABELS[m] + ':':<14} {means[m]:.4f} +/- {stds[m]:.4f}")
-        save_split_metrics(target, "ensemble", f"ens_da{int(drop_address)}", "cv", means)
-
-
 def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
@@ -180,13 +57,21 @@ def set_seed(seed: int = 42):
 def main(args):
     set_seed(args.seed)
 
-    # Both models train on the same price dataset. price_per_sqft is derived on
-    # the fly by dividing price by sqft_living (still a feature here).
-    df = load_df(PRICE_PATH)
+    # Raw variant data: features and price are unscaled. The ensemble trains a
+    # RandomForest directly on these raw values (no feature or target scaling).
+    (X_train, y_train), (X_test, y_test) = load_variant(args.variant)
 
-    X, y = split_X_y(df, "price")
+    # Raw living area (per row): used to build the pps target and to convert pps
+    # predictions back to price.
+    sqft_train = X_train["sqft_living"].to_numpy()
+    sqft_test = X_test["sqft_living"].to_numpy()
 
-    (X_train, y_train), (X_test, y_test) = split_train_test(X, y)
+    price_train = y_train.to_numpy(dtype=float)
+    price_test = y_test.to_numpy(dtype=float)
+
+    # Model 2 target: price per square foot of living area (raw dollars / sqft).
+    pps_train = price_train / sqft_train
+    pps_test = price_test / sqft_test
 
     model_config = RandomForestConfig(
         model="rf",
@@ -196,37 +81,42 @@ def main(args):
         min_samples_leaf=args.min_samples_leaf,
     )
 
-    base_train_kwargs = dict(
-        epochs=args.epochs,
-        lr=args.lr_mlp,
-        batch_size=args.batch_size,
-        verbose=args.verbose,
-    )
+    name = f"ensemble_rf_{args.variant}"
+    model1 = fit_rf(model_config, X_train, price_train, f"{name}_price")
+    model2 = fit_rf(model_config, X_train, pps_train, f"{name}_price_per_sqft")
 
-    # --- K-fold cross-validation on the train set (held-out test untouched) ---
-    fold_metrics, weights = cross_validate(
-        X_train, y_train, args.drop_address, model_config, base_train_kwargs,
-        args.k_folds, args.seed,
-    )
-    report_cv(fold_metrics, weights, args.drop_address, args.k_folds)
+    # Predictions are already in raw units.
+    price1_tr = model1.predict(X_train)
+    price1_te = model1.predict(X_test)
 
-    # --- Final fit on the full train set, evaluated on the held-out test set ---
-    preds, best_w, n_features = train_and_predict(
-        X_train, y_train, X_test, y_test, args.drop_address, model_config,
-        base_train_kwargs, save_models=True,
-    )
+    pps2_tr = model2.predict(X_train)
+    pps2_te = model2.predict(X_test)
+    price2_tr = pps2_tr * sqft_train
+    price2_te = pps2_te * sqft_test
+
+    # Blend weight optimized on the train split, held-out test evaluated once.
+    best_w, _ = optimize_weight(price_train, price1_tr, price2_tr)
+    ens_tr = best_w * price1_tr + (1.0 - best_w) * price2_tr
+    ens_te = best_w * price1_te + (1.0 - best_w) * price2_te
     print(
-        f"\n=== final holdout | ensemble weight (optimized on full train) ===\n"
+        f"\n=== ensemble weight (optimized on train) ===\n"
         f"w={best_w:.4f}  -> price = {best_w:.4f}*price_1 + "
         f"{1 - best_w:.4f}*(price_per_sqft_2 * sqft_living)"
     )
+
+    n_features = X_train.shape[1]
+    preds = {
+        "price": (price_train, price1_tr, price_test, price1_te),
+        "price_per_sqft": (pps_train, pps2_tr, pps_test, pps2_te),
+        "price_ensemble": (price_train, ens_tr, price_test, ens_te),
+    }
 
     for target in TARGETS:
         y_tr_true, y_tr_pred, y_te_true, y_te_pred = preds[target]
         print_metrics(
             target,
-            "ensemble",
-            f"ens_da{int(args.drop_address)}",
+            "ensemble_rf",
+            args.variant,
             y_tr_true,
             y_tr_pred,
             y_te_true,
@@ -237,31 +127,20 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train an RF ensemble: blend a direct price model with a "
-        "price_per_sqft model (weight optimized on train), evaluated with k-fold CV"
+        description="Train a RandomForest ensemble on raw values: blend a direct "
+        "price model with a price_per_sqft model (weight optimized on the train "
+        "split), evaluated on the held-out test set"
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="global random seed for reproducibility"
     )
-
     parser.add_argument(
-        "--drop_address",
-        action="store_true",
-        help="drop address (city, zipcode)",
+        "--variant",
+        type=str,
+        default="tgt",
+        choices=["cat", "tgt", "coord_only", "tgt_only"],
+        help="location-encoding variant (same as train.py)",
     )
-
-    parser.add_argument(
-        "--k_folds",
-        type=int,
-        default=5,
-        help="number of folds for cross-validation on the train set",
-    )
-
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument(
-        "--lr_mlp", type=float, default=1e-2, help="learning rate for mlp (Adam)"
-    )
-    parser.add_argument("--batch_size", type=int, default=16)
 
     parser.add_argument(
         "--max_depth_rf", type=int, default=None, help="max depth for random forest"
@@ -269,7 +148,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_estimators",
         type=int,
-        default=100,
+        default=25,
         help="number of trees for random forest",
     )
     parser.add_argument(
@@ -285,6 +164,5 @@ if __name__ == "__main__":
         help="min samples per leaf",
     )
 
-    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     main(args)

@@ -8,22 +8,24 @@ set -euo pipefail
 # models/best_models, data/processed) resolve correctly.
 cd "$(dirname "$(readlink -f "$0")")"
 
-# 0. Remove stale metrics (record.py appends, so a fresh run needs a clean file).
+# Remove stale metrics (record.py appends, so a fresh run needs a clean file).
 rm -f results/metrics.csv
 
-# 1. Preprocess the raw data into cat/tgt train/test variant files + scalers.
 python data/preprocess.py
 
-# 2. Train every model on each variant. The 'cat' variant (ordinal codes, no
-#    coords) is the categorical-encoding reference; 'tgt' uses target-encoded
-#    city/zipcode plus cartesian coordinates.
-variants=(cat tgt)
+variants=(cat coord_only tgt_only tgt)
 models=(mlp dt rf mgbdt)
 
+# Early stopping for the MLP cuts wasted epochs once the held-out loss plateaus
+# (other models ignore these flags).
 for variant in "${variants[@]}"; do
     for model in "${models[@]}"; do
         echo "=== Training ${model} | variant=${variant} ==="
-        python training/train.py --variant "${variant}" --model "${model}"
+        if [[ "${model}" == "mlp" ]]; then
+            python training/train.py --variant "${variant}" --model "${model}" --patience 5
+        else
+            python training/train.py --variant "${variant}" --model "${model}"
+        fi
     done
 done
 

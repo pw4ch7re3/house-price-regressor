@@ -14,7 +14,7 @@ path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if path not in sys.path:
     sys.path.insert(0, path)
 
-from data.dataload import load_variant
+from data.dataload import load_variant, scale_features, scale_target, invert_target
 from models import ModelConfig, TrainConfig
 from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
@@ -27,7 +27,9 @@ from training.record import print_metrics
 output_path = "models/best_models"
 
 
-def train(model_config: ModelConfig, train_config: TrainConfig, save_name: str):
+def build_model(model_config: ModelConfig, train_config: TrainConfig):
+    """Instantiate the model for ``model_config.model`` and fit it. Shared by
+    train.py and training/train_ensemble.py so both dispatch identically."""
     model_name = model_config.model.lower()
     if model_name == "mlp":
         model = MLP(cast(MLPConfig, model_config))
@@ -41,17 +43,23 @@ def train(model_config: ModelConfig, train_config: TrainConfig, save_name: str):
     elif model_name == "mgbdt":
         model = MGBDTModel(
             cast(mGBDTConfig, model_config),
-            layer_configs=[("tp_layer", "xgb", 8), ("tp_layer", "xgb")],
+            layer_configs=[("tp_layer", "xgb")],
             verbose=train_config.verbose,
         )
         model.fit(train_config)
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
+    return model
+
+
+def train(model_config: ModelConfig, train_config: TrainConfig, save_name: str):
+    model = build_model(model_config, train_config)
+
     os.makedirs(output_path, exist_ok=True)
     torch.save(
         model.state_dict(),
-        os.path.join(output_path, f"best_{model_name}_{save_name}.pth"),
+        os.path.join(output_path, f"best_{model_config.model.lower()}_{save_name}.pth"),
     )
 
     return model
@@ -67,30 +75,27 @@ def set_seed(seed: int = 42):
 def main(args):
     set_seed(args.seed)
 
-    # Split, encoding (target/categorical), and feature + target scaling are
-    # all baked into the materialized variant files by data/preprocess.py. The
-    # target column is MinMax-scaled; target_scaler holds the train {min, max}
-    # so predictions and true targets can be inverted back to dollars below.
-    (X_train, y_train), (X_test, y_test), target_scaler = load_variant(args.variant)
+    # Split and location-encoding are baked into the materialized variant files
+    # by data/preprocess.py; the files are kept on the RAW scale. Feature scaling
+    # (fit on train) and target MinMax scaling are applied here at train time.
+    (X_train, y_train), (X_test, y_test) = load_variant(args.variant)
+    X_train, X_test = scale_features(X_train.copy(), X_test.copy())
+    # target_scaler holds the train {min, max} so predictions and true targets
+    # can be inverted back to dollars below.
+    y_train_scaled, y_test_scaled, target_scaler = scale_target(y_train, y_test)
 
-    # DT regularization: coarse age bins (computed on the already-scaled age).
-    if args.model == "dt":
-        X_train = X_train.copy()
-        X_test = X_test.copy()
-        X_train["age_bin"] = pd.cut(
-            X_train["age"], bins=5, labels=[0, 1, 2, 3, 4]
-        ).astype(float)
-        X_test["age_bin"] = pd.cut(
-            X_test["age"], bins=5, labels=[0, 1, 2, 3, 4]
-        ).astype(float)
+    # MLP and mGBDT need different epoch budgets; dt/rf ignore epochs entirely.
+    epochs = args.epochs_mgbdt if args.model == "mgbdt" else args.epochs_mlp
 
     train_config = TrainConfig(
         X=X_train,
-        y=y_train,
-        epochs=args.epochs,
+        y=y_train_scaled,
+        epochs=epochs,
         lr=args.lr_mlp,
         batch_size=args.batch_size,
         verbose=args.verbose,
+        patience=args.patience,
+        val_split=args.val_split,
     )
 
     if args.model == "mlp":
@@ -134,18 +139,12 @@ def main(args):
     y_train_pred = model.predict(X_train)
     y_test_pred = model.predict(X_test)
 
-    # Invert the MinMax target scaling (baked in by preprocessing) so metrics
-    # are reported in dollars. Both predictions and the scaled true targets are
-    # mapped back: x = scaled * (max - min) + min.
-    span = target_scaler["max"] - target_scaler["min"]
-
-    def to_dollars(values):
-        return np.asarray(values, dtype=float).ravel() * span + target_scaler["min"]
-
-    y_train_pred = to_dollars(y_train_pred)
-    y_test_pred = to_dollars(y_test_pred)
-    y_train_true = to_dollars(y_train.values)
-    y_test_true = to_dollars(y_test.values)
+    # Invert the MinMax target scaling so metrics are reported in dollars. The
+    # true targets are already raw dollars; only predictions need inverting.
+    y_train_pred = invert_target(y_train_pred, target_scaler)
+    y_test_pred = invert_target(y_test_pred, target_scaler)
+    y_train_true = np.asarray(y_train.values, dtype=float).ravel()
+    y_test_true = np.asarray(y_test.values, dtype=float).ravel()
 
     n_features = X_train.shape[1]
 
@@ -178,19 +177,38 @@ if __name__ == "__main__":
         "--variant",
         type=str,
         default="tgt",
-        choices=["cat", "tgt"],
-        help="location-encoding variant: 'cat' (ordinal codes, no coords) or "
-        "'tgt' (target-encoded city/zipcode + cartesian x/y/z)",
+        choices=["cat", "tgt", "coord_only", "tgt_only"],
+        help="location-encoding variant: 'cat' (ordinal codes, no coords), "
+        "'tgt' (target-encoded city/zipcode + cartesian x/y/z), "
+        "'coord_only' (x/y/z only) or 'tgt_only' (target-encoded address only)",
     )
 
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument(
+        "--epochs_mlp", type=int, default=50, help="training epochs for mlp"
+    )
+    parser.add_argument(
+        "--epochs_mgbdt", type=int, default=20, help="training epochs for mgbdt"
+    )
     parser.add_argument(
         "--lr_mlp", type=float, default=1e-2, help="learning rate for mlp (Adam)"
     )
     parser.add_argument(
-        "--lr_mgbdt", type=float, default=0.3, help="learning rate for mgbdt (xgb)"
+        "--lr_mgbdt", type=float, default=0.1, help="learning rate for mgbdt (xgb)"
     )
     parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=0,
+        help="early-stopping patience for mlp (epochs without val improvement; "
+        "0 disables early stopping)",
+    )
+    parser.add_argument(
+        "--val_split",
+        type=float,
+        default=0.1,
+        help="fraction of training data held out for early-stopping validation",
+    )
 
     parser.add_argument(
         "--max_depth_dt", type=int, default=6, help="max depth for decision tree"
@@ -223,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_boost_round",
         type=int,
-        default=10,
+        default=5,
         help="num boost rounds per layer for mgbdt",
     )
     parser.add_argument(

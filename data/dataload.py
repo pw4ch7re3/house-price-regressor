@@ -1,7 +1,7 @@
-import json
-
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 HOUSING_PATH = "data/raw/latlong_added.csv"
 PRICE_PATH = "data/processed/usa_housing_dataset_price.csv"
@@ -9,9 +9,10 @@ PRICE_PER_SQFT_PATH = "data/processed/usa_housing_dataset_price_per_sqft.csv"
 
 PRICE_TEST_PATH = "data/processed/usa_housing_dataset_price_test.csv"
 
-# Materialized, model-ready variant datasets (split + encoded + scaled by
-# data/preprocess.py). Each CSV holds X and the scaled target together.
-VARIANTS = ("cat", "tgt")
+# Materialized variant datasets (split + location-encoded by data/preprocess.py).
+# Features and the price target are kept on their RAW scales here; feature and
+# target scaling are applied at train time (see scale_features / scale_target).
+# Each CSV holds X and the raw target together.
 VARIANT_PATHS = {
     "cat": {
         "train": "data/processed/cat_train.csv",
@@ -22,11 +23,26 @@ VARIANT_PATHS = {
         "test": "data/processed/tgt_test.csv",
     },
 }
+
+# Derived variants that isolate a single location signal from the 'tgt' files
+# (which carry both target-encoded city/zipcode and cartesian x/y/z). They are
+# built by dropping columns at load time, so they share the 'tgt' split,
+# encoding, scaling and target scaler.
+#   coord_only -> location via x/y/z only      (drop city/zipcode)
+#   tgt_only   -> location via target-encoding  (drop x/y/z)
+DERIVED_VARIANTS = {
+    "coord_only": ("tgt", "drop_addr"),
+    "tgt_only": ("tgt", "drop_coord"),
+}
+
+VARIANTS = tuple(VARIANT_PATHS) + tuple(DERIVED_VARIANTS)
 TARGET = "price"
 
-
-def target_scaler_path(variant: str) -> str:
-    return f"data/processed/target_scaler_{variant}.json"
+# Feature scaling column lists, applied at train time (fit on train, applied to
+# both splits). Only columns actually present are scaled (e.g. the 'cat' variant
+# has no x/y/z; derived variants drop one location signal).
+MINMAX_COLS = ["x", "y", "z", "condition", "age", "bedrooms", "bathrooms", "floors", "view"]
+ZSCORE_COLS = ["sqft_living", "sqft_above", "sqft_basement", "log_sqft_lot", "city", "zipcode"]
 
 
 def load_df(pathname: str):
@@ -54,6 +70,44 @@ def target_encode(train_X, train_y, test_X, col, smoothing=10):
     return train_enc, test_enc
 
 
+def scale_features(X_train: pd.DataFrame, X_test: pd.DataFrame):
+    """MinMax + Z-score feature scaling, fit on train, applied to both. Only
+    columns actually present are scaled (some variants drop x/y/z or city/zip)."""
+    minmax_cols = [c for c in MINMAX_COLS if c in X_train.columns]
+    zscore_cols = [c for c in ZSCORE_COLS if c in X_train.columns]
+
+    mm = MinMaxScaler()
+    X_train[minmax_cols] = mm.fit_transform(X_train[minmax_cols])
+    X_test[minmax_cols] = mm.transform(X_test[minmax_cols])
+
+    zs = StandardScaler()
+    X_train[zscore_cols] = zs.fit_transform(X_train[zscore_cols])
+    X_test[zscore_cols] = zs.transform(X_test[zscore_cols])
+
+    return X_train, X_test
+
+
+def scale_target(y_train, y_test):
+    """MinMax-scale a target, fit on train. Returns ``(y_train_scaled,
+    y_test_scaled, scaler)`` where ``scaler`` is a ``{"min", "max"}`` dict that
+    ``invert_target`` uses to map predictions back to the original scale."""
+    y_train = np.asarray(y_train, dtype=float).reshape(-1, 1)
+    y_test = np.asarray(y_test, dtype=float).reshape(-1, 1)
+
+    mm = MinMaxScaler()
+    y_train_scaled = mm.fit_transform(y_train).ravel()
+    y_test_scaled = mm.transform(y_test).ravel()
+    scaler = {"min": float(mm.data_min_[0]), "max": float(mm.data_max_[0])}
+    return y_train_scaled, y_test_scaled, scaler
+
+
+def invert_target(values, scaler):
+    """Inverse of ``scale_target``: map scaled values back to the original scale
+    via ``values * (max - min) + min``."""
+    span = scaler["max"] - scaler["min"]
+    return np.asarray(values, dtype=float).ravel() * span + scaler["min"]
+
+
 def split_X_y(df: pd.DataFrame, target: str):
     X = df.drop(columns=[target])
     y = df[target]
@@ -70,13 +124,21 @@ def split_train_test(
 
 
 def load_variant(variant: str):
-    """Load a materialized variant dataset.
+    """Load a materialized variant dataset on its RAW scale.
 
-    Returns ``((X_train, y_train), (X_test, y_test), target_scaler)`` where
-    ``target_scaler`` is the ``{"min": ..., "max": ...}`` dict used by
-    preprocessing to MinMax-scale the target, so callers can inverse-transform
-    predictions back to the original (dollar) scale.
+    Returns ``((X_train, y_train), (X_test, y_test))``. Features and the price
+    target are unscaled; callers apply ``scale_features`` / ``scale_target`` at
+    train time.
+
+    Derived variants (``coord_only``, ``tgt_only``) are built by dropping
+    location columns from the base ``tgt`` files at load time.
     """
+    if variant in DERIVED_VARIANTS:
+        base, dropper = DERIVED_VARIANTS[variant]
+        (X_train, y_train), (X_test, y_test) = load_variant(base)
+        drop = {"drop_addr": drop_addr, "drop_coord": drop_coord}[dropper]
+        return (drop(X_train), y_train), (drop(X_test), y_test)
+
     if variant not in VARIANT_PATHS:
         raise ValueError(f"Unknown variant: {variant} (expected one of {VARIANTS})")
 
@@ -86,7 +148,4 @@ def load_variant(variant: str):
     X_train, y_train = split_X_y(train_df, TARGET)
     X_test, y_test = split_X_y(test_df, TARGET)
 
-    with open(target_scaler_path(variant)) as f:
-        target_scaler = json.load(f)
-
-    return (X_train, y_train), (X_test, y_test), target_scaler
+    return (X_train, y_train), (X_test, y_test)
