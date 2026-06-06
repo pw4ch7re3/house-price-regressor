@@ -31,9 +31,7 @@ def compute_metrics(y_true, y_pred, n_features):
     }
 
 
-def save_metrics(
-    target_name, model_name, drop_address, drop_coord, train_metrics, test_metrics
-):
+def save_metrics(target_name, model_name, variant, train_metrics, test_metrics):
     """Append metrics to a long-format CSV for later visualization."""
     os.makedirs(os.path.dirname(METRICS_PATH), exist_ok=True)
     file_exists = os.path.exists(METRICS_PATH)
@@ -47,8 +45,7 @@ def save_metrics(
                     "timestamp",
                     "model",
                     "target",
-                    "drop_address",
-                    "drop_coord",
+                    "variant",
                     "split",
                     "metric",
                     "value",
@@ -61,8 +58,7 @@ def save_metrics(
                         timestamp,
                         model_name,
                         target_name,
-                        int(drop_address),
-                        int(drop_coord),
+                        variant,
                         split,
                         metric,
                         value,
@@ -70,9 +66,7 @@ def save_metrics(
                 )
 
 
-def save_split_metrics(
-    target_name, model_name, drop_address, drop_coord, split, metrics
-):
+def save_split_metrics(target_name, model_name, variant, split, metrics):
     """Append a single split's metrics (e.g. cross-validation mean) to the CSV."""
     os.makedirs(os.path.dirname(METRICS_PATH), exist_ok=True)
     file_exists = os.path.exists(METRICS_PATH)
@@ -86,8 +80,7 @@ def save_split_metrics(
                     "timestamp",
                     "model",
                     "target",
-                    "drop_address",
-                    "drop_coord",
+                    "variant",
                     "split",
                     "metric",
                     "value",
@@ -99,8 +92,7 @@ def save_split_metrics(
                     timestamp,
                     model_name,
                     target_name,
-                    int(drop_address),
-                    int(drop_coord),
+                    variant,
                     split,
                     metric,
                     value,
@@ -111,8 +103,7 @@ def save_split_metrics(
 def print_metrics(
     target_name,
     model_name,
-    drop_address,
-    drop_coord,
+    variant,
     y_train_true,
     y_train_pred,
     y_test_true,
@@ -122,15 +113,10 @@ def print_metrics(
     train_metrics = compute_metrics(y_train_true, y_train_pred, n_features)
     test_metrics = compute_metrics(y_test_true, y_test_pred, n_features)
 
-    print(
-        f"=== {model_name} | {target_name} "
-        f"(drop_address={drop_address}, drop_coord={drop_coord}) ==="
-    )
+    print(f"=== {model_name} | {target_name} (variant={variant}) ===")
     for metric, value in train_metrics.items():
         print(f"Train {METRIC_LABELS[metric] + ':':<14} {value:.4f}")
     for metric, value in test_metrics.items():
         print(f"Test  {METRIC_LABELS[metric] + ':':<14} {value:.4f}")
 
-    save_metrics(
-        target_name, model_name, drop_address, drop_coord, train_metrics, test_metrics
-    )
+    save_metrics(target_name, model_name, variant, train_metrics, test_metrics)

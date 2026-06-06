@@ -167,7 +167,7 @@ def report_cv(fold_metrics, weights, drop_address, k_folds):
         print(f"--- ensemble | {target} (CV val) ---")
         for m in metric_keys:
             print(f"CV {METRIC_LABELS[m] + ':':<14} {means[m]:.4f} +/- {stds[m]:.4f}")
-        save_split_metrics(target, "ensemble", drop_address, True, "cv", means)
+        save_split_metrics(target, "ensemble", f"ens_da{int(drop_address)}", "cv", means)
 
 
 def set_seed(seed: int = 42):
@@ -226,8 +226,7 @@ def main(args):
         print_metrics(
             target,
             "ensemble",
-            args.drop_address,
-            True,
+            f"ens_da{int(args.drop_address)}",
             y_tr_true,
             y_tr_pred,
             y_te_true,
