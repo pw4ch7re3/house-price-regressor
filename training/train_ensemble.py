@@ -3,17 +3,27 @@ import os
 import sys
 import random
 import argparse
+import pandas as pd
 import numpy as np
 
 path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if path not in sys.path:
     sys.path.insert(0, path)
 
-from data.dataload import load_variant
+from data.dataload import (
+    load_variant,
+    scale_features,
+    scale_target,
+    invert_target,
+)
 from models import TrainConfig
-from models.random_forest import RandomForestConfig, RandomForest
+from models.mlp import MLPConfig
+from models.decision_tree import DecisionTreeConfig
+from models.random_forest import RandomForestConfig
+from models.mgbdt_ours import mGBDTConfig
 
 from metrics.mse import rmse
+from training.train import build_model
 from training.record import print_metrics
 
 output_path = "models/best_models"
@@ -23,14 +33,49 @@ output_path = "models/best_models"
 TARGETS = ["price", "price_per_sqft", "price_ensemble"]
 
 
-def fit_rf(model_config: RandomForestConfig, X_train, y_train, save_name: str):
-    """Fit a RandomForest on raw (unscaled) values and persist its state dict.
-    RandomForest is invariant to per-feature scaling and to target scaling, so
-    everything is trained directly on raw price / price_per_sqft."""
-    model = RandomForest(model_config)
-    # RandomForest.fit only reads X and y; epochs/lr are unused placeholders.
-    model.fit(TrainConfig(X=X_train, y=y_train, epochs=0, lr=0.0))
+def make_model_config(model: str, input_dim: int, args):
+    """Build the ModelConfig for ``model`` from CLI args (mirrors train.py)."""
+    if model == "mlp":
+        return MLPConfig(
+            model="mlp",
+            input_dim=input_dim,
+            hidden_dims=[32, 32],
+            output_dim=1,
+        )
+    if model == "dt":
+        return DecisionTreeConfig(
+            model="dt",
+            max_depth=args.max_depth_dt,
+            min_samples_split=args.min_samples_split,
+            min_samples_leaf=args.min_samples_leaf,
+        )
+    if model == "rf":
+        return RandomForestConfig(
+            model="rf",
+            n_estimators=args.n_estimators,
+            max_depth=args.max_depth_rf,
+            min_samples_split=args.min_samples_split,
+            min_samples_leaf=args.min_samples_leaf,
+        )
+    if model == "mgbdt":
+        return mGBDTConfig(
+            model="mgbdt",
+            input_size=input_dim,
+            output_size=1,
+            task="regression",
+            learning_rate=args.lr_mgbdt,
+            max_depth=args.max_depth_mgbdt,
+            num_boost_round=args.num_boost_round,
+            target_lr=args.target_lr,
+        )
+    raise ValueError(f"Unknown model: {model}")
 
+
+def fit_target(model_config, X_train, y_train_scaled, train_kwargs, save_name):
+    """Fit one base model on a scaled target and persist its state dict."""
+    model = build_model(
+        model_config, TrainConfig(X=X_train, y=y_train_scaled, **train_kwargs)
+    )
     os.makedirs(output_path, exist_ok=True)
     torch.save(model.state_dict(), os.path.join(output_path, f"{save_name}.pth"))
     return model
@@ -57,12 +102,12 @@ def set_seed(seed: int = 42):
 def main(args):
     set_seed(args.seed)
 
-    # Raw variant data: features and price are unscaled. The ensemble trains a
-    # RandomForest directly on these raw values (no feature or target scaling).
+    # Raw variant data: features and price are unscaled, so price_per_sqft can be
+    # formed from raw price / raw sqft_living before any scaling is applied.
     (X_train, y_train), (X_test, y_test) = load_variant(args.variant)
 
-    # Raw living area (per row): used to build the pps target and to convert pps
-    # predictions back to price.
+    # Raw living area (per row) — used to build the pps target and to convert pps
+    # predictions back to price. Captured before feature scaling z-scores it.
     sqft_train = X_train["sqft_living"].to_numpy()
     sqft_test = X_test["sqft_living"].to_numpy()
 
@@ -73,28 +118,46 @@ def main(args):
     pps_train = price_train / sqft_train
     pps_test = price_test / sqft_test
 
-    model_config = RandomForestConfig(
-        model="rf",
-        n_estimators=args.n_estimators,
-        max_depth=args.max_depth_rf,
-        min_samples_split=args.min_samples_split,
-        min_samples_leaf=args.min_samples_leaf,
+    # Feature scaling (fit on train) shared by both base models.
+    X_train, X_test = scale_features(X_train.copy(), X_test.copy())
+
+    # Each target is MinMax-scaled for training (so mlp/mgbdt behave), then
+    # predictions are inverted back to their raw units for blending/metrics.
+    yp_tr_s, _, price_scaler = scale_target(price_train, price_test)
+    pps_tr_s, _, pps_scaler = scale_target(pps_train, pps_test)
+
+    epochs = args.epochs_mgbdt if args.model == "mgbdt" else args.epochs_mlp
+    train_kwargs = dict(
+        epochs=epochs,
+        lr=args.lr_mlp,
+        batch_size=args.batch_size,
+        verbose=args.verbose,
+        patience=args.patience,
+        val_split=args.val_split,
     )
 
-    name = f"ensemble_rf_{args.variant}"
-    model1 = fit_rf(model_config, X_train, price_train, f"{name}_price")
-    model2 = fit_rf(model_config, X_train, pps_train, f"{name}_price_per_sqft")
+    model_config_price = make_model_config(args.model, X_train.shape[1], args)
+    model_config_pps = make_model_config(args.model, X_train.shape[1], args)
 
-    # Predictions are already in raw units.
-    price1_tr = model1.predict(X_train)
-    price1_te = model1.predict(X_test)
+    name = f"ensemble_{args.model}_{args.variant}"
+    model1 = fit_target(
+        model_config_price, X_train, yp_tr_s, train_kwargs, f"{name}_price"
+    )
+    model2 = fit_target(
+        model_config_pps, X_train, pps_tr_s, train_kwargs, f"{name}_price_per_sqft"
+    )
 
-    pps2_tr = model2.predict(X_train)
-    pps2_te = model2.predict(X_test)
+    # Predictions, inverted to raw units.
+    price1_tr = invert_target(model1.predict(X_train), price_scaler)
+    price1_te = invert_target(model1.predict(X_test), price_scaler)
+
+    pps2_tr = invert_target(model2.predict(X_train), pps_scaler)
+    pps2_te = invert_target(model2.predict(X_test), pps_scaler)
     price2_tr = pps2_tr * sqft_train
     price2_te = pps2_te * sqft_test
 
-    # Blend weight optimized on the train split, held-out test evaluated once.
+    # Blend weight optimized on the train split (in dollar space), held-out test
+    # evaluated once (no cross-validation).
     best_w, _ = optimize_weight(price_train, price1_tr, price2_tr)
     ens_tr = best_w * price1_tr + (1.0 - best_w) * price2_tr
     ens_te = best_w * price1_te + (1.0 - best_w) * price2_te
@@ -111,28 +174,37 @@ def main(args):
         "price_ensemble": (price_train, ens_tr, price_test, ens_te),
     }
 
+    model_name = f"ensemble_{args.model}"
     for target in TARGETS:
-        y_tr_true, y_tr_pred, y_te_true, y_te_pred = preds[target]
-        print_metrics(
-            target,
-            "ensemble_rf",
-            args.variant,
-            y_tr_true,
-            y_tr_pred,
-            y_te_true,
-            y_te_pred,
-            n_features,
-        )
+        if target == "price_ensemble":
+            y_tr_true, y_tr_pred, y_te_true, y_te_pred = preds[target]
+            print_metrics(
+                "price",
+                model_name,
+                args.variant,
+                y_tr_true,
+                y_tr_pred,
+                y_te_true,
+                y_te_pred,
+                n_features,
+            )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train a RandomForest ensemble on raw values: blend a direct "
-        "price model with a price_per_sqft model (weight optimized on the train "
-        "split), evaluated on the held-out test set"
+        description="Train a blended ensemble: a direct price model plus a "
+        "price_per_sqft model (weight optimized on the train split), evaluated "
+        "on the held-out test set"
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="global random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="rf",
+        choices=["mlp", "dt", "rf", "mgbdt"],
+        help="base model used for both ensemble members",
     )
     parser.add_argument(
         "--variant",
@@ -143,26 +215,72 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--epochs_mlp", type=int, default=50, help="training epochs for mlp"
+    )
+    parser.add_argument(
+        "--epochs_mgbdt", type=int, default=20, help="training epochs for mgbdt"
+    )
+    parser.add_argument(
+        "--lr_mlp", type=float, default=1e-2, help="learning rate for mlp (Adam)"
+    )
+    parser.add_argument(
+        "--lr_mgbdt", type=float, default=0.1, help="learning rate for mgbdt (xgb)"
+    )
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=0,
+        help="early-stopping patience for mlp (0 disables early stopping)",
+    )
+    parser.add_argument(
+        "--val_split",
+        type=float,
+        default=0.1,
+        help="fraction of training data held out for early-stopping validation",
+    )
+
+    parser.add_argument(
+        "--max_depth_dt", type=int, default=6, help="max depth for decision tree"
+    )
+    parser.add_argument(
         "--max_depth_rf", type=int, default=None, help="max depth for random forest"
     )
     parser.add_argument(
         "--n_estimators",
         type=int,
-        default=25,
+        default=100,
         help="number of trees for random forest",
+    )
+    parser.add_argument(
+        "--max_depth_mgbdt", type=int, default=3, help="max depth for mgbdt (xgb)"
     )
     parser.add_argument(
         "--min_samples_split",
         type=int,
         default=2,
-        help="min samples to split",
+        help="min samples to split for decision tree",
     )
     parser.add_argument(
         "--min_samples_leaf",
         type=int,
         default=2,
-        help="min samples per leaf",
+        help="min samples per leaf for decision tree",
     )
 
+    parser.add_argument(
+        "--num_boost_round",
+        type=int,
+        default=5,
+        help="num boost rounds per layer for mgbdt",
+    )
+    parser.add_argument(
+        "--target_lr",
+        type=float,
+        default=0.5,
+        help="target-propagation step size for mgbdt",
+    )
+
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     main(args)
