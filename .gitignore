@@ -218,3 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 .vscode/settings.json
 models/best_models/*.pth
+experiments/main_k-fold1.ipynb
+results/rf_variant_comparison_test.png
+results/top5_adjusted_r2_test_no_ensemble.png
+results/top5_adjusted_r2_test.png
