@@ -31,6 +31,40 @@ def compute_metrics(y_true, y_pred, n_features):
     }
 
 
+def mean_metrics(fold_metrics):
+    """Average a list of per-fold metric dicts into a single mean-per-metric dict.
+
+    Keys are taken from the first dict (every fold shares the same metric set).
+    """
+    keys = fold_metrics[0].keys()
+    n = len(fold_metrics)
+    return {k: sum(m[k] for m in fold_metrics) / n for k in keys}
+
+
+def std_metrics(fold_metrics):
+    """Population std of each metric across folds (for printing mean ± std)."""
+    keys = fold_metrics[0].keys()
+    means = mean_metrics(fold_metrics)
+    n = len(fold_metrics)
+    return {
+        k: (sum((m[k] - means[k]) ** 2 for m in fold_metrics) / n) ** 0.5 for k in keys
+    }
+
+
+# Long-format schema. ``std`` holds the across-fold standard deviation for
+# cross-validation rows, and is left blank for single-split rows.
+METRICS_HEADER = [
+    "timestamp",
+    "model",
+    "target",
+    "variant",
+    "split",
+    "metric",
+    "value",
+    "std",
+]
+
+
 def save_metrics(target_name, model_name, variant, train_metrics, test_metrics):
     """Append metrics to a long-format CSV for later visualization."""
     os.makedirs(os.path.dirname(METRICS_PATH), exist_ok=True)
@@ -40,34 +74,21 @@ def save_metrics(target_name, model_name, variant, train_metrics, test_metrics):
     with open(METRICS_PATH, "a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(
-                [
-                    "timestamp",
-                    "model",
-                    "target",
-                    "variant",
-                    "split",
-                    "metric",
-                    "value",
-                ]
-            )
+            writer.writerow(METRICS_HEADER)
         for split, metrics in (("train", train_metrics), ("test", test_metrics)):
             for metric, value in metrics.items():
+                # Single-split metrics carry no across-fold std.
                 writer.writerow(
-                    [
-                        timestamp,
-                        model_name,
-                        target_name,
-                        variant,
-                        split,
-                        metric,
-                        value,
-                    ]
+                    [timestamp, model_name, target_name, variant, split, metric, value, ""]
                 )
 
 
-def save_split_metrics(target_name, model_name, variant, split, metrics):
-    """Append a single split's metrics (e.g. cross-validation mean) to the CSV."""
+def save_split_metrics(target_name, model_name, variant, split, metrics, stds=None):
+    """Append a single split's metrics (e.g. cross-validation mean) to the CSV.
+
+    ``stds`` is an optional ``{metric: std}`` dict (e.g. from ``std_metrics``); when
+    given, each row's ``std`` column holds the across-fold standard deviation.
+    """
     os.makedirs(os.path.dirname(METRICS_PATH), exist_ok=True)
     file_exists = os.path.exists(METRICS_PATH)
     timestamp = datetime.now().isoformat(timespec="seconds")
@@ -75,28 +96,11 @@ def save_split_metrics(target_name, model_name, variant, split, metrics):
     with open(METRICS_PATH, "a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(
-                [
-                    "timestamp",
-                    "model",
-                    "target",
-                    "variant",
-                    "split",
-                    "metric",
-                    "value",
-                ]
-            )
+            writer.writerow(METRICS_HEADER)
         for metric, value in metrics.items():
+            std_val = "" if stds is None else stds.get(metric, "")
             writer.writerow(
-                [
-                    timestamp,
-                    model_name,
-                    target_name,
-                    variant,
-                    split,
-                    metric,
-                    value,
-                ]
+                [timestamp, model_name, target_name, variant, split, metric, value, std_val]
             )
 
 

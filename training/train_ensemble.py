@@ -11,74 +11,34 @@ if path not in sys.path:
     sys.path.insert(0, path)
 
 from data.dataload import (
-    load_variant,
+    load_df,
+    split_X_y,
+    kfold_splits,
+    apply_variant,
     scale_features,
     scale_target,
     invert_target,
+    PRICE_PATH,
+    TARGET,
 )
 from models import TrainConfig
-from models.mlp import MLPConfig
-from models.decision_tree import DecisionTreeConfig
-from models.random_forest import RandomForestConfig
-from models.mgbdt_ours import mGBDTConfig
 
 from metrics.mse import rmse
-from training.train import build_model
-from training.record import print_metrics
-
-output_path = "models/best_models"
-
-# Targets reported by the ensemble: the direct price model, the price_per_sqft
-# model, and the blended ensemble.
-TARGETS = ["price", "price_per_sqft", "price_ensemble"]
-
-
-def make_model_config(model: str, input_dim: int, args):
-    """Build the ModelConfig for ``model`` from CLI args (mirrors train.py)."""
-    if model == "mlp":
-        return MLPConfig(
-            model="mlp",
-            input_dim=input_dim,
-            hidden_dims=[32, 32],
-            output_dim=1,
-        )
-    if model == "dt":
-        return DecisionTreeConfig(
-            model="dt",
-            max_depth=args.max_depth_dt,
-            min_samples_split=args.min_samples_split,
-            min_samples_leaf=args.min_samples_leaf,
-        )
-    if model == "rf":
-        return RandomForestConfig(
-            model="rf",
-            n_estimators=args.n_estimators,
-            max_depth=args.max_depth_rf,
-            min_samples_split=args.min_samples_split,
-            min_samples_leaf=args.min_samples_leaf,
-        )
-    if model == "mgbdt":
-        return mGBDTConfig(
-            model="mgbdt",
-            input_size=input_dim,
-            output_size=1,
-            task="regression",
-            learning_rate=args.lr_mgbdt,
-            max_depth=args.max_depth_mgbdt,
-            num_boost_round=args.num_boost_round,
-            target_lr=args.target_lr,
-        )
-    raise ValueError(f"Unknown model: {model}")
+from training.train import build_model, make_model_config
+from training.record import (
+    compute_metrics,
+    mean_metrics,
+    std_metrics,
+    save_split_metrics,
+    METRIC_LABELS,
+)
 
 
-def fit_target(model_config, X_train, y_train_scaled, train_kwargs, save_name):
-    """Fit one base model on a scaled target and persist its state dict."""
-    model = build_model(
+def fit_target(model_config, X_train, y_train_scaled, train_kwargs):
+    """Fit one base model on a scaled target (no persistence during CV)."""
+    return build_model(
         model_config, TrainConfig(X=X_train, y=y_train_scaled, **train_kwargs)
     )
-    os.makedirs(output_path, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(output_path, f"{save_name}.pth"))
-    return model
 
 
 def optimize_weight(y_true, price_pred, price_from_pps_pred, steps: int = 101):
@@ -102,29 +62,12 @@ def set_seed(seed: int = 42):
 def main(args):
     set_seed(args.seed)
 
-    # Raw variant data: features and price are unscaled, so price_per_sqft can be
-    # formed from raw price / raw sqft_living before any scaling is applied.
-    (X_train, y_train), (X_test, y_test) = load_variant(args.variant)
-
-    # Raw living area (per row) — used to build the pps target and to convert pps
-    # predictions back to price. Captured before feature scaling z-scores it.
-    sqft_train = X_train["sqft_living"].to_numpy()
-    sqft_test = X_test["sqft_living"].to_numpy()
-
-    price_train = y_train.to_numpy(dtype=float)
-    price_test = y_test.to_numpy(dtype=float)
-
-    # Model 2 target: price per square foot of living area (raw dollars / sqft).
-    pps_train = price_train / sqft_train
-    pps_test = price_test / sqft_test
-
-    # Feature scaling (fit on train) shared by both base models.
-    X_train, X_test = scale_features(X_train.copy(), X_test.copy())
-
-    # Each target is MinMax-scaled for training (so mlp/mgbdt behave), then
-    # predictions are inverted back to their raw units for blending/metrics.
-    yp_tr_s, _, price_scaler = scale_target(price_train, price_test)
-    pps_tr_s, _, pps_scaler = scale_target(pps_train, pps_test)
+    # Reproducible k-fold CV over the raw engineered frame. Split + per-fold
+    # location encoding (apply_variant) happen in memory so target encoding is
+    # re-fit per fold (no leakage). The blend weight is optimized on each fold's
+    # own train split; metrics are the across-fold mean.
+    df = load_df(PRICE_PATH)
+    X, y = split_X_y(df, TARGET)
 
     epochs = args.epochs_mgbdt if args.model == "mgbdt" else args.epochs_mlp
     train_kwargs = dict(
@@ -136,68 +79,93 @@ def main(args):
         val_split=args.val_split,
     )
 
-    model_config_price = make_model_config(args.model, X_train.shape[1], args)
-    model_config_pps = make_model_config(args.model, X_train.shape[1], args)
-
-    name = f"ensemble_{args.model}_{args.variant}"
-    model1 = fit_target(
-        model_config_price, X_train, yp_tr_s, train_kwargs, f"{name}_price"
-    )
-    model2 = fit_target(
-        model_config_pps, X_train, pps_tr_s, train_kwargs, f"{name}_price_per_sqft"
-    )
-
-    # Predictions, inverted to raw units.
-    price1_tr = invert_target(model1.predict(X_train), price_scaler)
-    price1_te = invert_target(model1.predict(X_test), price_scaler)
-
-    pps2_tr = invert_target(model2.predict(X_train), pps_scaler)
-    pps2_te = invert_target(model2.predict(X_test), pps_scaler)
-    price2_tr = pps2_tr * sqft_train
-    price2_te = pps2_te * sqft_test
-
-    # Blend weight optimized on the train split (in dollar space), held-out test
-    # evaluated once (no cross-validation).
-    best_w, _ = optimize_weight(price_train, price1_tr, price2_tr)
-    ens_tr = best_w * price1_tr + (1.0 - best_w) * price2_tr
-    ens_te = best_w * price1_te + (1.0 - best_w) * price2_te
-    print(
-        f"\n=== ensemble weight (optimized on train) ===\n"
-        f"w={best_w:.4f}  -> price = {best_w:.4f}*price_1 + "
-        f"{1 - best_w:.4f}*(price_per_sqft_2 * sqft_living)"
-    )
-
-    n_features = X_train.shape[1]
-    preds = {
-        "price": (price_train, price1_tr, price_test, price1_te),
-        "price_per_sqft": (pps_train, pps2_tr, pps_test, pps2_te),
-        "price_ensemble": (price_train, ens_tr, price_test, ens_te),
-    }
-
     model_name = f"ensemble_{args.model}"
-    for target in TARGETS:
-        if target == "price_ensemble":
-            y_tr_true, y_tr_pred, y_te_true, y_te_pred = preds[target]
-            print_metrics(
-                "price",
-                model_name,
-                args.variant,
-                y_tr_true,
-                y_tr_pred,
-                y_te_true,
-                y_te_pred,
-                n_features,
-            )
+    fold_train_metrics = []
+    fold_test_metrics = []
+    weights = []
+
+    for fold, ((X_train, y_train), (X_test, y_test)) in enumerate(
+        kfold_splits(X, y, args.k, args.seed)
+    ):
+        X_train, X_test = apply_variant(X_train, X_test, y_train, args.variant)
+
+        # Raw living area + price, captured before feature scaling z-scores them —
+        # used to form the pps target and convert pps predictions back to price.
+        sqft_train = X_train["sqft_living"].to_numpy()
+        sqft_test = X_test["sqft_living"].to_numpy()
+        price_train = y_train.to_numpy(dtype=float)
+        price_test = y_test.to_numpy(dtype=float)
+
+        # Model 2 target: price per square foot of living area (raw $/sqft).
+        pps_train = price_train / sqft_train
+        pps_test = price_test / sqft_test
+
+        # Feature scaling (fit on train) shared by both base models.
+        X_train, X_test = scale_features(X_train.copy(), X_test.copy())
+
+        # Each target is MinMax-scaled for training, then predictions are inverted
+        # back to raw units for blending/metrics.
+        yp_tr_s, _, price_scaler = scale_target(price_train, price_test)
+        pps_tr_s, _, pps_scaler = scale_target(pps_train, pps_test)
+
+        model_config_price = make_model_config(args.model, X_train.shape[1], args)
+        model_config_pps = make_model_config(args.model, X_train.shape[1], args)
+        model1 = fit_target(model_config_price, X_train, yp_tr_s, train_kwargs)
+        model2 = fit_target(model_config_pps, X_train, pps_tr_s, train_kwargs)
+
+        # Predictions, inverted to raw units.
+        price1_tr = invert_target(model1.predict(X_train), price_scaler)
+        price1_te = invert_target(model1.predict(X_test), price_scaler)
+        pps2_tr = invert_target(model2.predict(X_train), pps_scaler)
+        pps2_te = invert_target(model2.predict(X_test), pps_scaler)
+        price2_tr = pps2_tr * sqft_train
+        price2_te = pps2_te * sqft_test
+
+        # Blend weight optimized on this fold's train split (in dollar space).
+        best_w, _ = optimize_weight(price_train, price1_tr, price2_tr)
+        weights.append(best_w)
+        ens_tr = best_w * price1_tr + (1.0 - best_w) * price2_tr
+        ens_te = best_w * price1_te + (1.0 - best_w) * price2_te
+
+        n_features = X_train.shape[1]
+        fold_train_metrics.append(compute_metrics(price_train, ens_tr, n_features))
+        fold_test_metrics.append(compute_metrics(price_test, ens_te, n_features))
+        print(
+            f"[{model_name}|{args.variant}] fold {fold + 1}/{args.k} w={best_w:.3f} "
+            f"test Adjusted R²: {fold_test_metrics[-1]['Adjusted_R2']:.4f}"
+        )
+
+    train_mean = mean_metrics(fold_train_metrics)
+    test_mean = mean_metrics(fold_test_metrics)
+    train_std = std_metrics(fold_train_metrics)
+    test_std = std_metrics(fold_test_metrics)
+
+    print(
+        f"\n=== {model_name} | price (variant={args.variant}) | {args.k}-fold CV mean ==="
+    )
+    print(f"mean blend weight w = {sum(weights) / len(weights):.4f}")
+    for metric, value in train_mean.items():
+        print(f"Train {METRIC_LABELS[metric] + ':':<14} {value:.4f}")
+    for metric, value in test_mean.items():
+        print(f"Test  {METRIC_LABELS[metric] + ':':<14} {value:.4f} ± {test_std[metric]:.4f}")
+
+    # Record the across-fold mean (value) and std under split=train/test, one row
+    # per metric, so results/visualize_results.ipynb can draw error bars.
+    save_split_metrics("price", model_name, args.variant, "train", train_mean, train_std)
+    save_split_metrics("price", model_name, args.variant, "test", test_mean, test_std)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Train a blended ensemble: a direct price model plus a "
-        "price_per_sqft model (weight optimized on the train split), evaluated "
-        "on the held-out test set"
+        "price_per_sqft model (weight optimized per fold on its train split), "
+        "evaluated with k-fold cross-validation (reported as the across-fold mean)"
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="global random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--k", type=int, default=5, help="number of cross-validation folds"
     )
     parser.add_argument(
         "--model",

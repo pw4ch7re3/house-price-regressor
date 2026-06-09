@@ -14,7 +14,17 @@ path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if path not in sys.path:
     sys.path.insert(0, path)
 
-from data.dataload import load_variant, scale_features, scale_target, invert_target
+from data.dataload import (
+    load_df,
+    split_X_y,
+    kfold_splits,
+    apply_variant,
+    scale_features,
+    scale_target,
+    invert_target,
+    PRICE_PATH,
+    TARGET,
+)
 from models import ModelConfig, TrainConfig
 from models.mlp import MLPConfig, MLP
 from models.decision_tree import DecisionTreeConfig, DecisionTree
@@ -22,10 +32,13 @@ from models.random_forest import RandomForestConfig, RandomForest
 
 from models.mgbdt_ours import mGBDTConfig, MGBDTModel
 
-from training.record import print_metrics
-
-output_path = "models/best_models"
-
+from training.record import (
+    compute_metrics,
+    mean_metrics,
+    std_metrics,
+    save_split_metrics,
+    METRIC_LABELS,
+)
 
 def build_model(model_config: ModelConfig, train_config: TrainConfig):
     """Instantiate the model for ``model_config.model`` and fit it. Shared by
@@ -53,18 +66,6 @@ def build_model(model_config: ModelConfig, train_config: TrainConfig):
     return model
 
 
-def train(model_config: ModelConfig, train_config: TrainConfig, save_name: str):
-    model = build_model(model_config, train_config)
-
-    os.makedirs(output_path, exist_ok=True)
-    torch.save(
-        model.state_dict(),
-        os.path.join(output_path, f"best_{model_config.model.lower()}_{save_name}.pth"),
-    )
-
-    return model
-
-
 def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
@@ -72,58 +73,38 @@ def set_seed(seed: int = 42):
     torch.cuda.manual_seed_all(seed)
 
 
-def main(args):
-    set_seed(args.seed)
-
-    # Split and location-encoding are baked into the materialized variant files
-    # by data/preprocess.py; the files are kept on the RAW scale. Feature scaling
-    # (fit on train) and target MinMax scaling are applied here at train time.
-    (X_train, y_train), (X_test, y_test) = load_variant(args.variant)
-    X_train, X_test = scale_features(X_train.copy(), X_test.copy())
-    # target_scaler holds the train {min, max} so predictions and true targets
-    # can be inverted back to dollars below.
-    y_train_scaled, y_test_scaled, target_scaler = scale_target(y_train, y_test)
-
-    # MLP and mGBDT need different epoch budgets; dt/rf ignore epochs entirely.
-    epochs = args.epochs_mgbdt if args.model == "mgbdt" else args.epochs_mlp
-
-    train_config = TrainConfig(
-        X=X_train,
-        y=y_train_scaled,
-        epochs=epochs,
-        lr=args.lr_mlp,
-        batch_size=args.batch_size,
-        verbose=args.verbose,
-        patience=args.patience,
-        val_split=args.val_split,
-    )
-
-    if args.model == "mlp":
-        model_config = MLPConfig(
+def make_model_config(model: str, input_dim: int, args):
+    """Build the ModelConfig for ``model`` from CLI args. Shared by train.py and
+    training/train_ensemble.py so both dispatch identically. ``args.seed`` is
+    plumbed into dt/rf for reproducibility."""
+    if model == "mlp":
+        return MLPConfig(
             model="mlp",
-            input_dim=X_train.shape[1],
+            input_dim=input_dim,
             hidden_dims=[32, 32],
             output_dim=1,
         )
-    elif args.model == "dt":
-        model_config = DecisionTreeConfig(
+    if model == "dt":
+        return DecisionTreeConfig(
             model="dt",
             max_depth=args.max_depth_dt,
             min_samples_split=args.min_samples_split,
             min_samples_leaf=args.min_samples_leaf,
+            random_state=args.seed,
         )
-    elif args.model == "rf":
-        model_config = RandomForestConfig(
+    if model == "rf":
+        return RandomForestConfig(
             model="rf",
             n_estimators=args.n_estimators,
             max_depth=args.max_depth_rf,
             min_samples_split=args.min_samples_split,
             min_samples_leaf=args.min_samples_leaf,
+            random_state=args.seed,
         )
-    elif args.model == "mgbdt":
-        model_config = mGBDTConfig(
+    if model == "mgbdt":
+        return mGBDTConfig(
             model="mgbdt",
-            input_size=X_train.shape[1],
+            input_size=input_dim,
             output_size=1,
             task="regression",
             learning_rate=args.lr_mgbdt,
@@ -131,39 +112,90 @@ def main(args):
             num_boost_round=args.num_boost_round,
             target_lr=args.target_lr,
         )
-    else:
-        raise ValueError(f"Unknown model: {args.model}")
+    raise ValueError(f"Unknown model: {model}")
 
-    model = train(model_config, train_config, args.variant)
 
-    y_train_pred = model.predict(X_train)
-    y_test_pred = model.predict(X_test)
+def print_cv_summary(model_name, variant, k, train_mean, test_mean, test_std):
+    """Print the across-fold mean (± std on test) per metric."""
+    print(f"\n=== {model_name} | price (variant={variant}) | {k}-fold CV mean ===")
+    for metric, value in train_mean.items():
+        print(f"Train {METRIC_LABELS[metric] + ':':<14} {value:.4f}")
+    for metric, value in test_mean.items():
+        print(f"Test  {METRIC_LABELS[metric] + ':':<14} {value:.4f} ± {test_std[metric]:.4f}")
 
-    # Invert the MinMax target scaling so metrics are reported in dollars. The
-    # true targets are already raw dollars; only predictions need inverting.
-    y_train_pred = invert_target(y_train_pred, target_scaler)
-    y_test_pred = invert_target(y_test_pred, target_scaler)
-    y_train_true = np.asarray(y_train.values, dtype=float).ravel()
-    y_test_true = np.asarray(y_test.values, dtype=float).ravel()
 
-    n_features = X_train.shape[1]
+def main(args):
+    set_seed(args.seed)
 
-    print_metrics(
-        "price",
-        args.model,
-        args.variant,
-        y_train_true,
-        y_train_pred,
-        y_test_true,
-        y_test_pred,
-        n_features,
-    )
+    # Reproducible k-fold CV over the raw engineered frame. The split AND the
+    # per-fold location encoding (apply_variant) are done in memory so target
+    # encoding is re-fit on each fold's train rows (no leakage). Feature scaling
+    # (fit on train) and target MinMax scaling are applied per fold at train time.
+    df = load_df(PRICE_PATH)
+    X, y = split_X_y(df, TARGET)
+
+    # MLP and mGBDT need different epoch budgets; dt/rf ignore epochs entirely.
+    epochs = args.epochs_mgbdt if args.model == "mgbdt" else args.epochs_mlp
+
+    fold_train_metrics = []
+    fold_test_metrics = []
+
+    for fold, ((X_train, y_train), (X_test, y_test)) in enumerate(
+        kfold_splits(X, y, args.k, args.seed)
+    ):
+        X_train, X_test = apply_variant(X_train, X_test, y_train, args.variant)
+        X_train, X_test = scale_features(X_train.copy(), X_test.copy())
+        # target_scaler holds the train {min, max} so predictions can be inverted
+        # back to dollars below.
+        y_train_scaled, _, target_scaler = scale_target(y_train, y_test)
+
+        train_config = TrainConfig(
+            X=X_train,
+            y=y_train_scaled,
+            epochs=epochs,
+            lr=args.lr_mlp,
+            batch_size=args.batch_size,
+            verbose=args.verbose,
+            patience=args.patience,
+            val_split=args.val_split,
+        )
+        model_config = make_model_config(args.model, X_train.shape[1], args)
+        model = build_model(model_config, train_config)
+
+        # Invert the MinMax target scaling so metrics are reported in dollars. The
+        # true targets are already raw dollars; only predictions need inverting.
+        y_train_pred = invert_target(model.predict(X_train), target_scaler)
+        y_test_pred = invert_target(model.predict(X_test), target_scaler)
+        y_train_true = np.asarray(y_train.values, dtype=float).ravel()
+        y_test_true = np.asarray(y_test.values, dtype=float).ravel()
+
+        n_features = X_train.shape[1]
+        fold_train_metrics.append(compute_metrics(y_train_true, y_train_pred, n_features))
+        fold_test_metrics.append(compute_metrics(y_test_true, y_test_pred, n_features))
+        print(
+            f"[{args.model}|{args.variant}] fold {fold + 1}/{args.k} "
+            f"test Adjusted R²: {fold_test_metrics[-1]['Adjusted_R2']:.4f}"
+        )
+
+    train_mean = mean_metrics(fold_train_metrics)
+    test_mean = mean_metrics(fold_test_metrics)
+    train_std = std_metrics(fold_train_metrics)
+    test_std = std_metrics(fold_test_metrics)
+    print_cv_summary(args.model, args.variant, args.k, train_mean, test_mean, test_std)
+
+    # Record the across-fold mean (value) and std under split=train/test, one row
+    # per metric, so results/visualize_results.ipynb can draw error bars.
+    save_split_metrics("price", args.model, args.variant, "train", train_mean, train_std)
+    save_split_metrics("price", args.model, args.variant, "test", test_mean, test_std)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a house price regression model")
     parser.add_argument(
         "--seed", type=int, default=42, help="global random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--k", type=int, default=5, help="number of cross-validation folds"
     )
     parser.add_argument(
         "--model",

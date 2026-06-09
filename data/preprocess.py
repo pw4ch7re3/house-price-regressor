@@ -3,8 +3,7 @@ import numpy as np
 
 from dataload import (
     load_df,
-    drop_coord,
-    target_encode,
+    apply_variant,
     split_X_y,
     split_train_test,
     HOUSING_PATH,
@@ -81,23 +80,10 @@ def build_variant(
 ):
     """Build one location-encoding variant from the shared split.
 
-    - ``cat``: ordinal city/zipcode codes, no cartesian coordinates.
-    - ``tgt``: target-encoded city/zipcode (fit on train) plus x/y/z.
-
-    Returns the RAW ``(X_train, X_test)``. Feature and target scaling are applied
-    at train time (see dataload.scale_features / scale_target).
+    Thin wrapper over ``dataload.apply_variant`` (the single source of truth) so
+    the materialized variant files match the train-time CV encoding.
     """
-    X_train, X_test = X_train.copy(), X_test.copy()
-
-    if variant == "cat":
-        X_train, X_test = drop_coord(X_train), drop_coord(X_test)
-    elif variant == "tgt":
-        for col in ["city", "zipcode"]:
-            X_train[col], X_test[col] = target_encode(X_train, y_train, X_test, col)
-    else:
-        raise ValueError(f"Unknown variant: {variant}")
-
-    return X_train, X_test
+    return apply_variant(X_train, X_test, y_train, variant)
 
 
 def write_variant(variant, X_train, X_test, y_train, y_test):

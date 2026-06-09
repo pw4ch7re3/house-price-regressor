@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 HOUSING_PATH = "data/raw/latlong_added.csv"
@@ -121,6 +121,54 @@ def split_train_test(
         X, y, test_size=test_size, random_state=seed
     )
     return (X_train, y_train), (X_test, y_test)
+
+
+def kfold_splits(X: pd.DataFrame, y: pd.Series, n_splits: int = 5, seed: int = 42):
+    """Yield reproducible k-fold train/test splits of the raw engineered frame.
+
+    Each yielded item mirrors ``split_train_test``'s shape:
+    ``((X_train, y_train), (X_test, y_test))``. The fold assignment is fixed by
+    ``KFold(shuffle=True, random_state=seed)`` so runs are reproducible.
+    """
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    for train_idx, test_idx in kf.split(X):
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        yield (X_train, y_train), (X_test, y_test)
+
+
+def apply_variant(
+    X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Series, variant: str
+):
+    """Build one location-encoding variant from a raw split, at train time.
+
+    Single source of truth for variant construction (shared by training and by
+    data/preprocess.py). Target encoding is fit on ``y_train`` only, so it is
+    safe to call per cross-validation fold without leakage.
+
+    - ``cat``: ordinal city/zipcode codes, drop cartesian x/y/z.
+    - ``tgt``: target-encoded city/zipcode (fit on train) plus x/y/z.
+    - ``coord_only``: ``tgt`` then drop city/zipcode (x/y/z only).
+    - ``tgt_only``: ``tgt`` then drop x/y/z (target-encoded address only).
+
+    Returns the RAW ``(X_train, X_test)``; callers apply ``scale_features`` /
+    ``scale_target`` afterwards.
+    """
+    X_train, X_test = X_train.copy(), X_test.copy()
+
+    if variant == "cat":
+        return drop_coord(X_train), drop_coord(X_test)
+
+    if variant in ("tgt", "coord_only", "tgt_only"):
+        for col in ["city", "zipcode"]:
+            X_train[col], X_test[col] = target_encode(X_train, y_train, X_test, col)
+        if variant == "coord_only":
+            return drop_addr(X_train), drop_addr(X_test)
+        if variant == "tgt_only":
+            return drop_coord(X_train), drop_coord(X_test)
+        return X_train, X_test
+
+    raise ValueError(f"Unknown variant: {variant} (expected one of {VARIANTS})")
 
 
 def load_variant(variant: str):

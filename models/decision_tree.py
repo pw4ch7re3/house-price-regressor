@@ -13,6 +13,7 @@ class DecisionTreeConfig(ModelConfig):
     min_samples_split: int = field(default=2)
     min_samples_leaf: int = field(default=1)
     max_features: float | Literal["auto", "sqrt", "log2"] | None = field(default=None)
+    random_state: int | None = field(default=42)
 
 
 class DecisionTree:
@@ -22,6 +23,7 @@ class DecisionTree:
             min_samples_split=model_config.min_samples_split,
             min_samples_leaf=model_config.min_samples_leaf,
             max_features=model_config.max_features,
+            random_state=model_config.random_state,
         )
 
     @timer
