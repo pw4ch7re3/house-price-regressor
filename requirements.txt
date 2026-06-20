@@ -1,0 +1,17 @@
+# Core scientific stack
+numpy==2.3.4
+pandas==2.3.3
+scipy==1.16.3
+
+# Models
+torch==2.9.1
+scikit-learn==1.7.2
+xgboost==3.2.0
+
+# Plotting / reporting (figures, result notebooks)
+matplotlib==3.10.6
+
+# Utilities (model persistence + vendored mGBDT dependencies)
+joblib==1.5.2
+six==1.17.0
+termcolor==3.3.0
