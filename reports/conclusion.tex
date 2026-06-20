@@ -1,0 +1,40 @@
+\section{Conclusion, Limitations, and Future Work}
+
+We compared four regression models (MLP, DT, RF, mGBDT) on the \textit{USA House
+Prices} dataset across four location-encoding variants, both as single models and as
+a price / price-per-sqft stacking ensemble, all under shared 5-fold cross-validation.
+
+\textbf{Key findings.}
+(i) Coordinate and target encoding both beat naive categorical encoding for every
+model, but their relative ranking is model-dependent and statistically inconclusive,
+reflecting the irregular geography of housing demand.
+(ii) Price-per-sqft stacking yields a further, consistent improvement for the stronger
+models by decoupling price from living area and damping outliers.
+(iii) The best overall configuration, an RF ensemble on coordinate-only features,
+reaches a validation Adjusted $R^2$ of $0.794$ and cuts RMSE by $22\%$ relative to the
+\texttt{rf}/\texttt{cat} baseline.
+(iv) A multi-layer mGBDT did not help: its second layer fit noise, so a single
+target-propagation layer (equivalent to plain XGBoost) was both simpler and stronger,
+which we adopt as the final boosting model.
+
+\textbf{Practical implication.}
+The deeper, beyond-size relationships hypothesized at the outset did not emerge merely
+from a more expressive model; they surfaced only after domain-aware preprocessing
+(coordinate encoding and price-per-sqft stacking). Feature engineering, paired with a
+well-regularized tree ensemble, was more decisive than model depth on this tabular task.
+
+\textbf{Limitations.}
+Our conclusions rest on a single dataset. The two techniques that drove the gains are
+also dataset-specific: coordinate encoding presumes meaningful latitude/longitude
+fields, and price-per-sqft stacking presumes a size-dominated, outlier-heavy target.
+Both may not generalize to other markets or feature sets.
+
+\textbf{Future work.}
+Three directions follow naturally. First, validate coordinate encoding and
+price-per-sqft stacking on additional datasets and housing markets to test how far the
+gains transfer beyond Washington State. Second, instrument the pipeline to record the
+secondary efficiency metrics (training time, inference time, peak memory), which the
+current implementation does not yet measure. Third, revisit deeper mGBDT stacks with
+stronger regularization or richer inverse mappings, to probe whether the layered
+representation can help on tasks with more hierarchical structure than this one.
+In future opportunities, we aim to apply mGBDT to complex datasets such as stock data, where more hierarchical learning may be possible.

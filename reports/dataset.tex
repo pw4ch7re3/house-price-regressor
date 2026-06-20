@@ -1,0 +1,82 @@
+\section{Dataset}
+
+\subsection{Source and Overview}
+
+We use the \textit{USA House Prices} dataset published on Kaggle~\footnote{\url{https://www.kaggle.com/datasets/fratzcan/usa-house-prices/data}},
+which contains 4,140 residential property sales records from Washington State.
+The raw dataset comprises 18 columns covering structural attributes, location
+information, and transaction metadata.
+Preprocessing removes records with a non-positive price and the most extreme
+price outliers (the top $0.1\%$ by price), leaving \textbf{4,086} records; this
+caps only a handful of pathological sales while deliberately retaining realistic
+noise.
+We then remove non-informative fields (\texttt{date}, \texttt{street},
+\texttt{statezip}, \texttt{country}) and apply the feature engineering described
+in Section~\ref{sec:method}, yielding \textbf{17} model-ready input features.
+All reported numbers come from 5-fold cross-validation over these 4,086 records
+(about 3,269 training / 817 validation rows per fold); we do not use a single
+fixed train/test split.
+
+\subsection{Prediction Target}
+
+The single reported prediction target is \textbf{\texttt{price}}, the raw
+transaction price in USD. As is typical for residential price prediction, raw
+price is strongly correlated with living area (\texttt{sqft\_living}): larger
+homes tend to be more expensive simply by virtue of their size, which can cause
+a model to over-rely on size-related features.
+
+To counteract this, we additionally derive an auxiliary quantity,
+\texttt{price\_per\_sqft}:
+\begin{equation}
+  \texttt{price\_per\_sqft} = \frac{\texttt{price}}{\texttt{sqft\_living}}.
+\end{equation}
+Normalising sale price by interior area---analogous to the ``price per square
+metre'' convention in real estate valuation---decouples the size effect from the
+price signal and tames price outliers (an extreme \emph{price} need not be an
+extreme \emph{price-per-sqft}).
+Crucially, \texttt{price\_per\_sqft} is \emph{not} reported as a separate
+regression task. Instead it is used inside the stacking ensemble of
+Section~\ref{sec:method}: a price-per-sqft model is trained alongside a direct
+price model, its prediction is converted back to a price via $\times\,
+\texttt{sqft\_living}$, and the two are blended. All four models (\textbf{MLP},
+\textbf{DT}, \textbf{RF}, \textbf{mGBDT}) are trained and evaluated on the
+\texttt{price} target, both as single models and as this stacked ensemble.
+
+\subsection{Feature Description}
+
+Table~\ref{tab:features} lists all 17 features used as model inputs after
+preprocessing. Removed raw columns (\texttt{sqft\_lot}, \texttt{yr\_built},
+\texttt{yr\_renovated}, \texttt{lat}, \texttt{long}) are replaced by their
+engineered counterparts. The location fields \texttt{city} and \texttt{zipcode}
+are encoded differently per experimental variant (ordinal codes vs.\ target
+encoding), and the coordinate features \texttt{x,y,z} are present only in the
+coordinate-aware variants; see Section~\ref{sec:method}.
+
+\begin{table}[h]
+\centering
+\caption{Feature descriptions after preprocessing.}
+\label{tab:features}
+\begin{tabular}{llp{7.5cm}}
+\toprule
+\textbf{Feature} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{bedrooms}        & Numeric   & Number of bedrooms \\
+\texttt{bathrooms}       & Numeric   & Number of bathrooms (0.5-unit increments) \\
+\texttt{sqft\_living}    & Numeric   & Interior living area (sq.\ ft.) \\
+\texttt{floors}          & Numeric   & Number of floors \\
+\texttt{waterfront}      & Binary    & Waterfront property (0 = No, 1 = Yes) \\
+\texttt{view}            & Ordinal   & View quality score (0--4) \\
+\texttt{condition}       & Ordinal   & Property condition score (1--5) \\
+\texttt{sqft\_above}     & Numeric   & Above-ground floor area (sq.\ ft.) \\
+\texttt{sqft\_basement}  & Numeric   & Basement area (sq.\ ft.) \\
+\texttt{city}            & Categorical (encoded) & City name; ordinal code or target-encoded per variant \\
+\texttt{x}               & Numeric   & 3-D Cartesian coordinate: $\cos(\text{lat})\cdot\cos(\text{lon})$ \\
+\texttt{y}               & Numeric   & 3-D Cartesian coordinate: $\cos(\text{lat})\cdot\sin(\text{lon})$ \\
+\texttt{z}               & Numeric   & 3-D Cartesian coordinate: $\sin(\text{lat})$ \\
+\texttt{zipcode}         & Categorical (encoded) & ZIP code; ordinal code or target-encoded per variant \\
+\texttt{log\_sqft\_lot}  & Numeric   & $\log(1+\texttt{sqft\_lot})$; log-transform of lot area to reduce skew \\
+\texttt{was\_renovated}  & Binary    & Renovation history (0 = Never, 1 = Renovated) \\
+\texttt{age}             & Numeric   & Building age at time of sale: sale year $-$ year built \\
+\bottomrule
+\end{tabular}
+\end{table}

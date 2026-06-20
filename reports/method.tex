@@ -1,0 +1,160 @@
+\section{Method}
+\label{sec:method}
+
+\subsection{Research Goal}
+
+This study compares four regression models---MLP, Decision Tree (DT), Random Forest
+(RF), and mGBDT---on the \texttt{price} target, and asks whether richer feature
+encoding or model structure improves over a naive baseline (a Random Forest on
+ordinal-encoded categories).
+Two axes are crossed under identical preprocessing and evaluation: (i) the
+\emph{location-encoding variant} (\texttt{cat}, \texttt{tgt}, \texttt{coord\_only},
+\texttt{tgt\_only}), and (ii) whether each model is trained as a single price
+predictor or as a price / price-per-sqft \emph{stacking ensemble}. This yields
+$4\ \text{models}\times 4\ \text{variants}\times 2\ \text{modes}=32$ configurations,
+each evaluated by 5-fold cross-validation.
+
+% -------------------------------------------------------
+\subsection{Preprocessing}
+% -------------------------------------------------------
+
+Raw features are transformed as follows; all fold-dependent steps are fit on the
+training rows only.
+
+\textbf{Outliers and continuous features.}
+Records with non-positive price and the top $0.1\%$ of prices are dropped,
+leaving 4,086 records. \texttt{sqft\_lot} is replaced by
+$\texttt{log\_sqft\_lot}=\log(1+\texttt{sqft\_lot})$ to reduce skew, and the
+coordinates \texttt{lat}/\texttt{long} are projected onto the unit sphere
+(\emph{coordinate encoding}):
+\begin{equation}
+  x = \cos(\text{lat})\cos(\text{lon}),\quad
+  y = \cos(\text{lat})\sin(\text{lon}),\quad
+  z = \sin(\text{lat}),
+\end{equation}
+which avoids the $\pm180°$ meridian discontinuity; missing coordinates use the
+per-city (else global) mean.
+
+\textbf{Temporal and scaling.}
+We derive $\texttt{age}=\texttt{sale\_year}-\texttt{yr\_built}$ and a binary
+$\texttt{was\_renovated}$, then drop the raw year columns. For scaling,
+\texttt{x}, \texttt{y}, \texttt{z}, \texttt{condition}, \texttt{age},
+\texttt{bedrooms}, \texttt{bathrooms}, \texttt{floors}, \texttt{view} are
+MinMax-scaled to $[0,1]$, while \texttt{sqft\_living}, \texttt{sqft\_above},
+\texttt{sqft\_basement}, \texttt{log\_sqft\_lot} and the encoded \texttt{city},
+\texttt{zipcode} are Z-scored.
+
+\textbf{Categorical and target.}
+\texttt{city} and \texttt{zipcode} are encoded either as ordinal codes (naive
+baseline) or via leakage-free \emph{target encoding}---each category replaced by
+a smoothed mean of training price (smoothing $10$). \texttt{street},
+\texttt{statezip}, \texttt{country}, \texttt{date} are removed as redundant. The
+\texttt{price} target is MinMax-scaled for training and inverted to USD before
+scoring (no log-transform), so all errors stay interpretable in dollars; the
+auxiliary $\texttt{price\_per\_sqft}=\texttt{price}/\texttt{sqft\_living}$ is used
+only by the stacking ensemble (Section~\ref{subsec:ensemble}).
+
+% -------------------------------------------------------
+\subsection{Location-Encoding Variants}
+\label{subsec:variants}
+% -------------------------------------------------------
+
+We isolate the contribution of each location signal with four feature variants,
+all sharing the same split and scaling:
+\begin{itemize}
+  \item \texttt{cat} --- ordinal codes for \texttt{city}/\texttt{zipcode}, no
+    coordinates (the naive baseline encoding).
+  \item \texttt{tgt} --- target-encoded \texttt{city}/\texttt{zipcode} \emph{plus}
+    the cartesian coordinates \texttt{x,y,z}.
+  \item \texttt{coord\_only} --- coordinates \texttt{x,y,z} only
+    (\texttt{tgt} with \texttt{city}/\texttt{zipcode} dropped).
+  \item \texttt{tgt\_only} --- target-encoded address only
+    (\texttt{tgt} with \texttt{x,y,z} dropped).
+\end{itemize}
+
+% -------------------------------------------------------
+\subsection{Model Configuration}
+% -------------------------------------------------------
+
+All four models use the fixed configurations in Table~\ref{tab:hp_grid}, which
+produce every reported number. (Exploratory tuning scripts exist under
+\texttt{experiments/}, but the comparison holds configurations fixed so that
+differences are attributable to encoding and stacking, not per-cell tuning.)
+The \textbf{DT} is a single CART regressor~\cite{breiman1984cart}
+(interpretable lower bound); the \textbf{RF} is a bagged ensemble of 100 unpruned
+trees, and RF/\texttt{cat} is the headline baseline; the \textbf{MLP} is a
+$[32,32]$ ReLU network trained with Adam. The \textbf{mGBDT} uses XGBoost
+forward/inverse modules~\cite{chen2016xgboost} under target propagation; the
+reported \emph{single}-layer configuration reduces to standard XGBoost (a
+two-layer variant performed worse, Section~\ref{sec:result}), so it is labelled
+``mGBDT (XGBoost)''.
+
+\begin{table}[h]
+\centering
+\caption{Fixed model configurations used for all reported runs.}
+\label{tab:hp_grid}
+\begin{tabular}{llll}
+\toprule
+\textbf{Model} & \multicolumn{3}{l}{\textbf{Configuration}} \\
+\midrule
+DT    & \texttt{max\_depth}$=6$ & \texttt{min\_samples\_split}$=2$ & \texttt{min\_samples\_leaf}$=2$ \\
+\midrule
+RF    & \texttt{n\_estimators}$=100$ & \texttt{max\_depth}$=$None & \texttt{min\_samples\_leaf}$=2$ \\
+\midrule
+MLP   & hidden $[32,32]$, Adam & lr $=10^{-2}$, batch $16$ & $\le 50$ epochs, patience $5$ \\
+\midrule
+mGBDT & 1 TP layer over XGBoost & lr $=0.1$, \texttt{max\_depth}$=3$ & 5 boost rounds, $20$ epochs \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -------------------------------------------------------
+\subsection{Price / Price-per-sqft Stacking Ensemble}
+\label{subsec:ensemble}
+% -------------------------------------------------------
+
+To dampen the dominance of size and the influence of price outliers, each model can
+also be trained as a two-member stacking ensemble. On every fold we train one model
+to predict \texttt{price} and a second, identical model to predict
+\texttt{price\_per\_sqft}; the second model's prediction is converted back to a price
+estimate $\hat{p}_{2}=\widehat{\texttt{pps}}\times\texttt{sqft\_living}$. The final
+prediction blends the two,
+\begin{equation}
+  \hat{p} = w\,\hat{p}_{1} + (1-w)\,\hat{p}_{2},
+\end{equation}
+where the weight $w\in[0,1]$ is grid-searched (101 steps) to minimize RMSE on that
+fold's \emph{training} split before being applied to its validation split.
+
+% -------------------------------------------------------
+\subsection{Experimental Protocol}
+% -------------------------------------------------------
+
+All results use 5-fold cross-validation (shuffled, seed $42$) over the 4,086
+cleaned records, with fold indices shared across every model, variant, and mode
+for fairness. Target encoding, scaling, and the ensemble blend weight are fit on
+training rows only, so no validation information leaks. For each configuration we
+report the across-fold \emph{mean $\pm$ std} of every metric on both splits; the
+single \texttt{price} target is used throughout.
+
+% -------------------------------------------------------
+\subsection{Evaluation Metrics}
+% -------------------------------------------------------
+
+We report five complementary regression metrics. RMSE squares residuals and so
+penalises large mis-pricings; MAE weights all residuals equally and is
+outlier-robust (a large RMSE--MAE gap flags outlier dominance); MAPE is a
+scale-free percentage error; $R^2$ is the explained variance fraction; and
+Adjusted $R^2$ corrects $R^2$ for the number of predictors $k$ for fair
+comparison across models:
+\begin{equation}
+  \text{RMSE} = \sqrt{\tfrac{1}{n}\textstyle\sum_i(y_i - \hat{y}_i)^2},\quad
+  \text{MAE} = \tfrac{1}{n}\textstyle\sum_i|y_i - \hat{y}_i|,\quad
+  \text{MAPE} = \tfrac{1}{n}\textstyle\sum_i\big|\tfrac{y_i - \hat{y}_i}{y_i}\big|\times 100\%,
+\end{equation}
+\begin{equation}
+  R^2 = 1 - \frac{\sum_i(y_i-\hat{y}_i)^2}{\sum_i(y_i-\bar{y})^2},\qquad
+  \bar{R}^2 = 1 - \frac{(1-R^2)(n-1)}{n-k-1}.
+\end{equation}
+We rank configurations primarily by \textbf{Adjusted R$^2$ on the validation split}.
+Secondary efficiency indicators (training time, inference time, peak memory) are not
+recorded in the current pipeline and are left to future work.

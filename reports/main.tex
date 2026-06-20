@@ -1,0 +1,128 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{titlesec}
+\usepackage{hyperref}
+
+\geometry{margin=0.85in}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=blue
+}
+
+% Compact spacing to keep the report concise.
+\titlespacing*{\section}{0pt}{1.4ex plus 0.3ex}{0.8ex}
+\titlespacing*{\subsection}{0pt}{1.1ex plus 0.3ex}{0.5ex}
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\intextsep}{8pt plus 2pt minus 2pt}
+\setlength{\abovedisplayskip}{5pt}
+\setlength{\belowdisplayskip}{5pt}
+
+\title{%
+  \textbf{House Price Prediction via Tree-Based Models,}\\[4pt]
+  \textbf{Coordinate Encoding, and Price-per-sqft Stacking}
+}
+
+\author{%
+  \begin{tabular}{ll}
+    Seungho Han & 20211356 \\
+    Moonseong Son        & 20221222 \\
+    Sungho Kim           & 20241065 \\
+    Jaeyun Lim           & 20251303 \\
+  \end{tabular}
+}
+
+\date{%
+  Team 8 \quad $\cdot$ \quad June 9, 2026
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{center}
+  Code: \url{https://github.com/pw4ch7re3/house-price-regressor}
+\end{center}
+
+\section{Introduction}
+
+House price prediction is a supervised regression task: given property
+attributes, estimate a continuous sale price. The \textit{USA House Prices}
+dataset used here has three characteristics that shape our approach.
+First, several of the most informative features are not natively numeric:
+location fields such as \texttt{city} and \texttt{zipcode} carry strong price
+signal yet cannot be dropped or naively cast to integers.
+Second, the target price is severely right-skewed with a few extreme outliers,
+so we remove only the most extreme cases and retain realistic noise.
+Third, the feature space is imbalanced---living area (\texttt{sqft\_living})
+dominates a tree's feature importance, so a model can score reasonably while
+essentially predicting from size alone.
+
+This motivates our central hypothesis: a model that over-relies on the dominant
+size feature leaves predictive signal on the table, and richer
+representations---through more expressive model structure or better feature
+encoding---should recover it. We test this with four models spanning that
+spectrum: a Multi-Layer Perceptron (MLP), a Decision Tree (DT), a Random Forest
+(RF), and a Multi-Layered Gradient Boosting Decision Tree
+(mGBDT)~\cite{feng2018mgbdt}. We further study two domain-aware ideas:
+\emph{coordinate encoding}, which converts address fields into geographic
+coordinates, and \emph{price-per-sqft stacking}, which blends a direct price
+model with a price-per-square-foot model to dampen the influence of size and of
+price outliers. Throughout, the naive baseline is a Random Forest on
+ordinal-encoded categories (\texttt{rf}/\texttt{cat}), and we ask which
+combination of model, encoding, and stacking best improves over it.
+
+\input{Background}
+\input{Dataset}
+\input{Method}
+\input{Result}
+\input{Conclusion}
+
+\renewcommand{\refname}{references}
+\begin{thebibliography}{9}
+
+\bibitem{feng2018mgbdt}
+J. Feng, Y. Yu, and Z.-H. Zhou,
+``Multi-Layered Gradient Boosting Decision Trees,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+vol.~31, pp.~3551--3561, 2018.
+
+\bibitem{friedman2001greedy}
+J. H. Friedman,
+``Greedy Function Approximation: A Gradient Boosting Machine,''
+\textit{The Annals of Statistics}, vol.~29, no.~5, pp.~1189--1232, 2001.
+
+\bibitem{breiman1984cart}
+L. Breiman, J. H. Friedman, R. A. Olshen, and C. J. Stone,
+\textit{Classification and Regression Trees}.
+Wadsworth, 1984.
+
+\bibitem{chen2016xgboost}
+T. Chen and C. Guestrin,
+``XGBoost: A Scalable Tree Boosting System,''
+\textit{Proc.\ 22nd ACM SIGKDD}, pp.~785--794, 2016.
+
+\bibitem{hastie2009elements}
+T. Hastie, R. Tibshirani, and J. Friedman,
+\textit{The Elements of Statistical Learning: Data Mining, Inference, and
+Prediction}, 2nd ed.
+New York: Springer, 2009.
+
+\bibitem{friedman2002stochastic}
+J. H. Friedman,
+``Stochastic Gradient Boosting,''
+\textit{Computational Statistics \& Data Analysis}, vol.~38, no.~4,
+pp.~367--378, 2002.
+
+\end{thebibliography}
+
+\end{document}

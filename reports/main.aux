@@ -1,0 +1,62 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{feng2018mgbdt}
+\citation{breiman1984cart}
+\citation{hastie2009elements}
+\citation{friedman2001greedy}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Background and Related Work}{1}{section.2}\protected@file@percent }
+\newlabel{sec:background}{{2}{1}{Background and Related Work}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Decision and Regression Trees}{1}{subsection.2.1}\protected@file@percent }
+\citation{friedman2002stochastic}
+\citation{breiman1984cart}
+\citation{feng2018mgbdt}
+\citation{chen2016xgboost}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Gradient Boosting and Random Forests}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Multi-Layered Gradient Boosting Decision Trees}{2}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Dataset}{2}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Source and Overview}{2}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Prediction Target}{2}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Feature Description}{3}{subsection.3.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Feature descriptions after preprocessing.}}{3}{table.1}\protected@file@percent }
+\newlabel{tab:features}{{1}{3}{Feature descriptions after preprocessing}{table.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Method}{3}{section.4}\protected@file@percent }
+\newlabel{sec:method}{{4}{3}{Method}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Research Goal}{3}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Preprocessing}{3}{subsection.4.2}\protected@file@percent }
+\citation{breiman1984cart}
+\citation{chen2016xgboost}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Location-Encoding Variants}{4}{subsection.4.3}\protected@file@percent }
+\newlabel{subsec:variants}{{4.3}{4}{Location-Encoding Variants}{subsection.4.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Model Configuration}{4}{subsection.4.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Fixed model configurations used for all reported runs.}}{4}{table.2}\protected@file@percent }
+\newlabel{tab:hp_grid}{{2}{4}{Fixed model configurations used for all reported runs}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Price / Price-per-sqft Stacking Ensemble}{4}{subsection.4.5}\protected@file@percent }
+\newlabel{subsec:ensemble}{{4.5}{4}{Price / Price-per-sqft Stacking Ensemble}{subsection.4.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Experimental Protocol}{5}{subsection.4.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}Evaluation Metrics}{5}{subsection.4.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Experiments}{5}{section.5}\protected@file@percent }
+\newlabel{sec:result}{{5}{5}{Experiments}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Model $\times $ Encoding Comparison}{5}{subsection.5.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Single models --- validation Adjusted $R^2$ (mean $\pm $ std) by encoding variant.}}{5}{table.3}\protected@file@percent }
+\newlabel{tab:single}{{3}{5}{Single models --- validation Adjusted $R^2$ (mean $\pm $ std) by encoding variant}{table.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Stacking ensembles --- validation Adjusted $R^2$ (mean $\pm $ std) by encoding variant.}}{5}{table.4}\protected@file@percent }
+\newlabel{tab:ensemble}{{4}{5}{Stacking ensembles --- validation Adjusted $R^2$ (mean $\pm $ std) by encoding variant}{table.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Random Forest validation Adjusted $R^2$ across the four encoding variants. Every encoded variant beats the naive \texttt  {cat} baseline (dotted line).}}{6}{figure.1}\protected@file@percent }
+\newlabel{fig:rf_variants}{{1}{6}{Random Forest validation Adjusted $R^2$ across the four encoding variants. Every encoded variant beats the naive \texttt {cat} baseline (dotted line)}{figure.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Full validation metrics for headline configurations (\texttt  {price} target). RMSE/MAE in thousand USD; $R^2$ and Adj.\ $R^2$ are across-fold means.}}{6}{table.5}\protected@file@percent }
+\newlabel{tab:headline}{{5}{6}{Full validation metrics for headline configurations (\texttt {price} target). RMSE/MAE in thousand USD; $R^2$ and Adj.\ $R^2$ are across-fold means}{table.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Headline Configurations}{6}{subsection.5.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Top-7 configurations by validation Adjusted $R^2$ vs.\ the \texttt  {rf}/\texttt  {cat} baseline: single models (left) and including stacking ensembles (right). The best, ensemble \texttt  {rf}/\texttt  {coord\_only}, reaches $0.794$.}}{6}{figure.2}\protected@file@percent }
+\newlabel{fig:top7}{{2}{6}{Top-7 configurations by validation Adjusted $R^2$ vs.\ the \texttt {rf}/\texttt {cat} baseline: single models (left) and including stacking ensembles (right). The best, ensemble \texttt {rf}/\texttt {coord\_only}, reaches $0.794$}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Discussion}{6}{subsection.5.3}\protected@file@percent }
+\bibcite{feng2018mgbdt}{1}
+\bibcite{friedman2001greedy}{2}
+\bibcite{breiman1984cart}{3}
+\bibcite{chen2016xgboost}{4}
+\bibcite{hastie2009elements}{5}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion, Limitations, and Future Work}{7}{section.6}\protected@file@percent }
+\bibcite{friedman2002stochastic}{6}
+\gdef \@abspage@last{8}

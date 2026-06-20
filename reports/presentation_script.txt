@@ -1,0 +1,44 @@
+Good afternoon, today we will introduce our final project, Real-estate Price prediction via GBDT, coord encoding and stacking.
+
+Here's a brief overview of today's presentation. First, we'll introduce our motivation based on the dataset's characteristics.
+
+We choose USA house price dataset for our project's goal. The goal of this dataset is to price given the information of that house. It seems simple but this dataset has the following unique characteristics:
+
+1. although the prediction target, price, is numeric, dataset introduces a lot of features which cannot directly converted to numeric data.
+We cannot simply drop those string data because as you can see, some literal data such as "city" might have very useful information for predicting the house price.
+
+2. target is severly right-skewed & has a couple of extreme outliers. The difficulty of this dataset is largely dependent on how much outliers we're going to drop.
+
+To simulate real-life outliers and noises, we decided to only drop top-5 outliers.
+
+3. feature is highly imbalanced, as shown in this feature importance chart of decision tree. Price is highly dependent on "sqft_living", in other words, the area of the house tends to be the dominant feature that decides the house price.
+
+Based on these characteristics, our initial motivation is the following hypothesis: model only focus on dominant feature (such as living area) while ignoring the lesser features. Therefore, more sophisticated model structure might capture the deeper relationship other than living area of the house, leading to better prediction accuracy. We picked 4 candidates for the prediction: MLP, DT, RF and mGBDT. We will omit the explaination for models that we've already discussed during the lecture. Now, let us briefly introduce mGBDT.
+
+The mGBDT we used stacks XGBoost across multiple layers. F performs forward learning at each layer. G, instead of backpropagation, reversely computes the target value from the upper layer and passes it as a learning signal to the lower layer. We built our mGBDT with two such layers.
+
+To fairly compare between standard GBDT(XGBoost) and mGBDT, we first performed 5-Fold Cross-Validation on raw dataset and measured performance across five metrics. Across all five metrics, XGBoost achieved the lowest errors and the highest explanatory power. Based on these results, we selected XGBoost as our final model.
+
+mGBDT recorded the worse performance compared to standard , and we thought about why.
+The first-layer XGBoost already had sufficient expressive power on its own, and the second layer ended up learning noise rather than meaningful patterns, which degraded performance.
+Furthermore, mGBDT is advantageous for complex data that requires hierarchical abstraction — but we thought our dataset did not have that level of complexity.
+
+Our baseline was random forest with categorical encoding. Categorical encoding just naively convert string data into integer numeric. Alternative is target encoding, which replaces literal data with statistics of that category. For example, instead of Seattle, we use average house price of Seattle.
+
+On top of target encoding, we utilized our own idea: coordinate encoding. The idea is to capture actual location information instead of numeric label or statistics. So, we decided to mass-convert address data into coordinate data.
+
+As shown in this figure, coordinate encoding combined with target encoding outperforms naive categorical encoding.
+
+Here's top-7 model / encoding result sorted based on adjusted R2. One can observe that tgt+coord encoding usually works best, but it depends on the model type.
+
+Performance difference between target encoding and coordinate encoding was non-definitive. We suspect that as you can see in this map, house distribution is affected by nearby ocean, mountains, roads, etc.
+
+To achieve even higher performance, we decided to utilize another information: price-per-sqft. The idea is to regularize price outliers by dividing the price with area of that house. In other words, price outliers might not be price-per-sqft outliers.
+
+Using this, we can stack two model with different target. First, we train two separate models: one for predicting price, one for predicting price-per-sqft. After that, we predict the final price by calculating the weighted average between predicted price and predicted price-per-sqft times living area.
+
+By combining all the previous methods, we outperformed both baseline random forest with categorical encoding & standard approach of XGBoost with target encoding.
+
+Here's our conclusion: effectiveness of feature engineering methods depends on model type. Also, deeper relationship that we've assumed in our inital theory can emerge after domain-aware preprocessing, such as our price-per-sqft stacking.
+
+Our project has the following limitations: 1. Limitation on using the single dataset. 2. Lack of generalizability on preprocessing methods: both coordinate encoding & price-per-sqft only works in this specific type of dataset.
